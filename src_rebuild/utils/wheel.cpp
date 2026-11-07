@@ -63,6 +63,7 @@ void scan() {
         SDL_Log("Wheel does not expose constant-force effects"); SDL_HapticClose(haptic); haptic=nullptr; return;
     }
     SDL_HapticSetAutocenter(haptic,0);
+    if(SDL_HapticQuery(haptic)&SDL_HAPTIC_GAIN) SDL_HapticSetGain(haptic,100);
     effect = SDL_HapticEffect();
     effect.type = SDL_HAPTIC_CONSTANT;
     effect.constant.direction.type = SDL_HAPTIC_CARTESIAN;
@@ -144,8 +145,12 @@ void Wheel_Force(float aligning,float road) {
     forcePrimed=true;
     filteredForce += (racing::clamp(force,-1,1)-filteredForce)*racing::clamp(g_wheelSettings.filter,.01f,1);
     float gain=racing::clamp(g_wheelSettings.gain,0,1);
-    effect.constant.level=static_cast<Sint16>(racing::clamp(filteredForce*gain*(g_wheelSettings.forceInvert?-1:1),-1,1)*32767);
-    if (SDL_HapticUpdateEffect(haptic,effectId,&effect)<0 || SDL_HapticRunEffect(haptic,effectId,1)<0) Wheel_Stop();
+    float level=filteredForce*gain;
+    if(std::fabs(level)>.002f) level=(level<0?-1:1)*(racing::clamp(g_wheelSettings.minimumForce,0,.2f)+(1-racing::clamp(g_wheelSettings.minimumForce,0,.2f))*std::fabs(level));
+    effect.constant.level=static_cast<Sint16>(racing::clamp(level*(g_wheelSettings.forceInvert?-1:1),-1,1)*32767);
+    if (SDL_HapticUpdateEffect(haptic,effectId,&effect)<0 || SDL_HapticRunEffect(haptic,effectId,1)<0) {
+        static bool reported=false;if(!reported){SDL_Log("Wheel FFB submission failed: %s",SDL_GetError());reported=true;}Wheel_Stop();
+    }
 }
 
 void Wheel_LoadConfig(const char* path) {
@@ -173,6 +178,10 @@ void Wheel_LoadConfig(const char* path) {
     readFloat("rotation",g_wheelSettings.rotation); readFloat("hardware_rotation",g_wheelSettings.hardwareRotation); readFloat("steering_lock",g_wheelSettings.steeringLock);
     readFloat("ffb_gain",g_wheelSettings.gain); readFloat("ffb_damping",g_wheelSettings.damping);
     readFloat("ffb_road",g_wheelSettings.road); readFloat("ffb_filter",g_wheelSettings.filter);
+    readFloat("ffb_centering",g_wheelSettings.centering);readFloat("ffb_minimum",g_wheelSettings.minimumForce);
+    readFloat("handbrake_on",g_wheelSettings.handbrakeOn);readFloat("handbrake_off",g_wheelSettings.handbrakeOff);
+    g_wheelSettings.handbrakeOn=racing::clamp(g_wheelSettings.handbrakeOn,.05f,1);
+    g_wheelSettings.handbrakeOff=racing::clamp(g_wheelSettings.handbrakeOff,0,g_wheelSettings.handbrakeOn-.01f);
     auto& t=g_wheelSettings.transmission;
     int assisted=t.assisted,burnout=t.burnout; readInt("assisted_clutch",assisted); readInt("driver_burnout",burnout);
     t.assisted=assisted!=0; t.burnout=burnout!=0;
@@ -200,6 +209,7 @@ bool Wheel_SaveConfig(const char* path) {
         g_wheelSettings.handbrakeButton,g_wheelSettings.rotation,g_wheelSettings.steeringLock,g_wheelSettings.gain,
         g_wheelSettings.damping,g_wheelSettings.road,g_wheelSettings.filter,g_wheelSettings.forceInvert);
     fprintf(f,"hardware_rotation=%g\n",g_wheelSettings.hardwareRotation);
+    fprintf(f,"handbrake_on=%g\nhandbrake_off=%g\nffb_centering=%g\nffb_minimum=%g\n",g_wheelSettings.handbrakeOn,g_wheelSettings.handbrakeOff,g_wheelSettings.centering,g_wheelSettings.minimumForce);
     const auto& t=g_wheelSettings.transmission;
     fprintf(f,"assisted_clutch=%d\ndriver_burnout=%d\nclutch_bite=%g\nfinal_drive=%g\ntyre_radius=%g\nidle_rpm=%g\nredline_rpm=%g\n",t.assisted,t.burnout,t.bite,t.finalDrive,t.tyreRadius,t.idle,t.redline);
     for(int i=0;i<6;++i) fprintf(f,"ratio%d=%g\n",i,t.ratios[i]);

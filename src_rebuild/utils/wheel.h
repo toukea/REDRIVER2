@@ -10,7 +10,9 @@ struct WheelSettings {
     int gearButtons[6] = {12,13,14,15,16,17};
     int handbrakeButton = 2;
     float rotation = 900, hardwareRotation = 900, steeringLock = 35;
-    float gain = .35f, damping = .08f, road = .12f, filter = .35f;
+    float gain = .60f, damping = .08f, road = .20f, filter = .55f;
+    float handbrakeOn = .30f, handbrakeOff = .20f;
+    float centering = .65f, minimumForce = .08f;
     int forceInvert = 0;
     racing::Setup transmission;
 };

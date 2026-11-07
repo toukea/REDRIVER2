@@ -43,6 +43,7 @@ struct Transmission {
     Output out;
     float stallTime = 0, shiftTime = 0;
     int requested = 0;
+    bool burnoutFinished = false;
     void reset() { *this = Transmission(); }
     Output step(const Input& in, float speedMS, float dt, const Setup& cfg) {
         dt = clamp(dt, 0, .1f);
@@ -74,11 +75,26 @@ struct Transmission {
         if (out.stalled) out.rpm = 0;
         const float torqueCurve = clamp(1 - .45f * std::pow((out.rpm - 3500) / 3500, 2.f), .2f, 1);
         const float revLimit = out.rpm > cfg.redline ? 0.f : 1.f;
-        out.drive = out.gear && !out.stalled ? in.throttle * engagement * torqueCurve * cfg.ratios[idx] / cfg.ratios[1] * revLimit : 0;
+        // Driver's stock thrust already includes its acceleration envelope. Applying
+        // the entire gear reduction again removed 73% of fifth-gear propulsion.
+        const float gearing = clamp(cfg.ratios[idx] / cfg.ratios[1], 1.f, 1.3f);
+        const float lugging = idx == 1 ? 1.f : clamp((out.rpm-500)/1500, .2f, 1);
+        const float delivery = idx >= 3 ? 1.f : torqueCurve;
+        out.drive = out.gear && !out.stalled ? in.throttle * engagement * delivery * gearing * lugging * revLimit : 0;
         if (out.gear < 0) out.drive = -out.drive;
         out.engineBrake = out.gear ? engagement * (1-in.throttle) * .12f * cfg.ratios[idx] / cfg.ratios[1] : 0;
-        out.burnout = cfg.burnout && out.gear == 1 && in.throttle > .97f && engagement > .35f && !out.stalled && std::fabs(speedMS) < 8;
-        if (out.burnout) out.rpm = std::max(out.rpm, 3500.f);
+        if(in.throttle < .9f || out.gear != 1) burnoutFinished=false;
+        // Original CAR_PAD_WHEELSPIN cutoff: 452952 fixed-point velocity units.
+        const float burnoutCutoff = 452952.f/4096*.3f;
+        if(std::fabs(speedMS) >= burnoutCutoff) burnoutFinished=true;
+        bool launch = cfg.burnout && out.gear == 1 && in.throttle > .97f && engagement > .35f && !out.stalled;
+        out.burnout = launch && !burnoutFinished;
+        if(launch) {
+            // Circle becomes X above the cutoff, even if first remains selected.
+            // Do not let the synthetic first-gear RPM limiter interrupt that mode.
+            out.drive=in.throttle*engagement*(out.burnout?5000.f/4915:1.f);
+            out.rpm=clamp(out.rpm,3500,cfg.redline*.95f);
+        }
         return out;
     }
 };

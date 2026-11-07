@@ -68,8 +68,15 @@ void GetFrictionScalesDriver1(CAR_DATA* cp, CAR_LOCALS* cl, int* frontFS, int* r
 #ifndef PSX
 	if (Wheel_GameActive(cp))
 	{
-		*frontFS = 937 * hp->frictionScaleRatio / 32;
-		*rearFS = (cp->wheelspin ? 560 : 983) * hp->frictionScaleRatio / 32;
+		// Match the original Circle/Triangle friction distribution and rear lock.
+		int front = Wheel_GameBrake(cp) > .05f ? 1453 : cp->thrust > 0 ? 820 : 937;
+		if(cp->handbrake) {
+			if(cp->thrust > 0)cp->thrust=0;
+			front += cp->hd.wheel_speed < 1 ? -375 : 656;
+			cp->wheelspin=0;
+		} else if(cp->wheelspin) front+=600;
+		*frontFS = front * hp->frictionScaleRatio / 32;
+		*rearFS = (1920-front) * hp->frictionScaleRatio / 32;
 		*frontFS = FIXEDH(*frontFS * cp->ap.carCos->traction);
 		*rearFS = FIXEDH(*rearFS * cp->ap.carCos->traction);
 		for (int w = 0; w < 4; ++w)
@@ -484,7 +491,7 @@ void AddWheelForcesDriver1(CAR_DATA* cp, CAR_LOCALS* cl)
 				int bx = (i & 1) ? cdx : sdx;
 				int bz = (i & 1) ? cdz : sdz;
 				int longitudinal = FIXEDH((long long)pointVel[0] * bx + (long long)pointVel[2] * bz);
-				float amount = Wheel_GameBrake(cp) * .5f + ((i & 1) ? Wheel_GameHandbrake(cp) : 0);
+				float amount = Wheel_GameBrake(cp) * .5f;
 				int braking = int(amount * 5000);
 				braking = int(braking * MIN(1.f, ABS(longitudinal) / 8192.f));
 				if (longitudinal < 0) braking = -braking;

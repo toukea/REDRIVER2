@@ -39,5 +39,20 @@ int main(){
     cfg.assisted=false;box.reset();input.gear=1;input.clutch=1;input.throttle=0;box.step(input,0,1.f/30,cfg);
     input.clutch=0;for(int i=0;i<90;++i)box.step(input,0,1.f/30,cfg);check(box.out.stalled,"manual engine can stall");
     input.clutch=1;input.throttle=.2f;box.step(input,0,1.f/30,cfg);check(!box.out.stalled,"restart using clutch and accelerator");
+    // Circle stays active through the original launch speed, then becomes X.
+    cfg.assisted=true;input=Input();input.clutch=0;input.throttle=1;input.gear=1;box.reset();
+    for(int i=0;i<60;++i)box.step(input,20,1.f/30,cfg);
+    check(box.out.burnout && box.out.drive>1,"burnout maintained beyond old 8 m/s cutoff");
+    for(int i=0;i<60;++i)box.step(input,34,1.f/30,cfg);
+    check(!box.out.burnout && box.out.drive>.99f,"burnout becomes normal acceleration at native cutoff");
+    box.step(input,30,1.f/30,cfg);check(!box.out.burnout,"cutoff does not oscillate back into burnout");
+    input.throttle=0;box.step(input,0,1.f/30,cfg);input.throttle=1;box.step(input,0,1.f/30,cfg);
+    check(box.out.burnout,"lifting throttle rearms burnout");
+    for(int gear=3;gear<=5;++gear){box.reset();input.gear=gear;
+        float speeds[]={0,0,0,25,40,60};
+        for(int i=0;i<90;++i)box.step(input,speeds[gear],1.f/30,cfg);
+        check(box.out.drive>.99f,"high gear preserves stock propulsion in operating range");
+    }
+    input.throttle=0;box.step(input,60,1.f/30,cfg);check(box.out.engineBrake>0,"engine braking remains off throttle");
     std::printf("PASS: %d wheel model checks\n",checks);
 }

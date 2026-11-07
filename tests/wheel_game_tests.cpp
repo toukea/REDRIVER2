@@ -28,7 +28,7 @@ int main(){
     require(Wheel_GameActive(cp),"wheel bridge active");
     require(cp->wheel_angle>190 && cp->wheel_angle<210,"half steering bypasses PSX quantization");
     require(Wheel_GameBrake(cp)>.29f && Wheel_GameBrake(cp)<.31f,"analog brake preserved");
-    require(Wheel_GameHandbrake(cp)>.39f && Wheel_GameHandbrake(cp)<.41f,"analog handbrake preserved");
+    require(Wheel_GameHandbrake(cp)==1 && cp->handbrake==1,"30 percent pull triggers Triangle handbrake");
     const int steer=cp->wheel_angle, rpm=cp->hd.revs;
     const uint32_t base[]={WHEEL_REPLAY_MAGIC,123,456,789};
     const char* file="src_rebuild/bin/tests/wheel-test.D2RP";
@@ -38,7 +38,7 @@ int main(){
     NoPlayerControl=1;connected=false;g_wheelSettings.steeringLock=10;testInput=racing::Input();
     Wheel_GameApply(cp);
     require(cp->wheel_angle==steer && cp->hd.revs==rpm,"playback independent of hardware and settings");
-    require(Wheel_GameBrake(cp)>.29f && Wheel_GameHandbrake(cp)>.39f,"pedals preserved in playback");
+    require(Wheel_GameBrake(cp)>.29f && Wheel_GameHandbrake(cp)==1,"pedals and Triangle latch preserved in playback");
     Wheel_GameFeedback();require(!forceCount,"replay does not send force to hardware");
     uint32_t wrong[]={WHEEL_REPLAY_MAGIC,1,2,3};
     require(!Wheel_ReplayLoad(file,wrong,sizeof(wrong)),"mismatched base replay rejected");
@@ -53,5 +53,12 @@ int main(){
     require(cp->thrust==0 && Wheel_GameBrake(cp)>.99f,"disconnect releases throttle and applies brake");
     pauseflag=1;int stops=stopCount;Wheel_GameFeedback();require(stopCount>stops,"pause stops feedback");
     gStopPadReads=1;Wheel_GameApply(cp);require(!Wheel_GameActive(cp),"mission input lock respected");
+    gStopPadReads=0;connected=true;testInput.handbrake=.35f;Wheel_GameApply(cp);
+    require(cp->handbrake==1,"handbrake engages above threshold");
+    testInput.handbrake=.25f;Wheel_GameApply(cp);require(cp->handbrake==1,"handbrake hysteresis holds near threshold");
+    testInput.handbrake=.15f;Wheel_GameApply(cp);require(cp->handbrake==0,"handbrake releases below lower threshold");
+    testInput.handbrake=.25f;Wheel_GameApply(cp);require(cp->handbrake==0,"partial pull below threshold does not reengage");
+    pauseflag=0;MainPlayer.playerType=PLAYER_TYPE_CAR;testInput.handbrake=0;testInput.steering=.5f;Wheel_GameApply(cp);
+    int sent=forceCount;Wheel_GameContact(cp,0,-2000,20,0);Wheel_GameFeedback();require(forceCount>sent,"front contact produces feedback command");
     printf("PASS: %d game integration and replay checks\n",tests);
 }

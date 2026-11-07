@@ -1,4 +1,15 @@
-# Support volant — branche wheel-controller
+# Support volant — branche wheel-controller-drive-feel
+
+## Révision après les premiers essais en conduite
+
+La base testée est conservée sur `wheel-controller` (`a423d93e`). Cette branche contient les corrections de comportement suivantes, à revalider sur le G29 :
+
+- Burnout : la première à plein accélérateur conserve l'effet Circle jusqu'au seuil natif (`452952` unités de vitesse), puis délivre l'accélération normale. Une baisse de vitesse ne réactive pas le burnout tant que l'accélérateur n'a pas été relâché. L'embrayage garde la priorité. Le mode de lancement Driver évite que le limiteur synthétique de première interrompe cette transition.
+- Frein à main : la course déclenche le verrouillage arrière Triangle à 30 %, maintenu jusqu'au retour sous 20 %. `handbrake_on` et `handbrake_off` sont configurables. La répartition d'adhérence et la coupure de propulsion suivent désormais le comportement original. Le frein de service reste analogique.
+- Transmission : suppression de la seconde réduction de propulsion, qui ne laissait que 27 % de la force originale en cinquième, avant même la courbe de couple. Les rapports élevés retrouvent la propulsion Driver dans leur plage utile ; le sous-régime, le limiteur, l'embrayage et le frein moteur subsistent. C'est un compromis avec le moteur arcade, pas une nouvelle simulation mécanique complète.
+- Retour de force : signal latéral multiplié par quatre avant limitation, rappel lié au braquage/vitesse uniquement avec contact avant, gain initial 60 %, compensation minimale 8 % et journalisation des erreurs d'envoi. `ffb_centering` et `ffb_minimum` sont réglables. Le sens et l'intensité nécessitent un nouvel essai matériel.
+
+Les nouveaux replays portent la version 2 du compagnon `.wheel`. Les compagnons expérimentaux version 1 sont refusés car la physique a changé ; les replays natifs sans compagnon restent compatibles. Les sections ci-dessous décrivent aussi la version initiale et son processus d'installation.
 
 Cette première implémentation vise Windows et le Logitech G29 avec pédalier et shifter. La compilation et les tests automatisés sont vérifiés ; le matériel n'était pas disponible pendant le développement. Le sens du retour de force, les numéros d'axes/boutons et le comportement en conduite restent à valider sur le G29. La physique reste celle de Driver 2, enrichie d'une transmission simplifiée ; elle n'a pas la précision d'Assetto Corsa.
 
@@ -45,7 +56,7 @@ Le volant, les pédales, le shifter et le frein à main peuvent appartenir à de
 - Le neutre n'entraîne pas les roues. Un départ mal géré peut faire caler. Pour redémarrer, débrayer complètement (ou passer au neutre) et accélérer légèrement.
 - Les rapports modifient le couple aux roues et le régime. Le moteur dispose d'un ralenti, d'une courbe de couple, d'un limiteur et d'un frein moteur simplifiés. La marche arrière est refusée si la voiture avance trop vite ; l'inverse est également protégé.
 - Les pédales d'accélérateur et de frein sont indépendantes et progressives. Le frein ne commande jamais la marche arrière.
-- Le frein à main accepte un bouton (bouton 2 par défaut, indexation à partir de zéro) ou un axe USB progressif. Le freinage à fond peut bloquer les roues ; cette version n'ajoute pas d'ABS.
+- Le frein à main accepte un bouton (bouton 2 par défaut, indexation à partir de zéro) ou un axe USB qui déclenche désormais l'effet Triangle aux seuils décrits plus haut. Le freinage de service à fond peut bloquer les roues ; cette version n'ajoute pas d'ABS.
 - Le burnout Driver s'active en première, à plus de 97 % d'accélérateur, à faible vitesse et lorsque l'embrayage transmet du couple. Débrayé à fond, le moteur monte seul en régime. `driver_burnout=0` désactive cette assistance arcade.
 - Le HUD affiche le rapport engagé, le régime et le calage. Les quatre boutons de face, les premières commandes auxiliaires et la croix directionnelle disposent d'une correspondance de manette standard. Le clavier reste disponible pour les menus et le personnage à pied ; la conduite au volant vise le joueur 1.
 
@@ -55,13 +66,13 @@ Le couple est estimé à partir des forces latérales des pneus avant. Amortisse
 
 SDL doit exposer les effets de force constante pour ce périphérique. À défaut, les commandes restent utilisables sans retour de force et un message apparaît dans le journal. La compatibilité des autres volants doit être validée modèle par modèle ; des axes configurables ne garantissent pas à eux seuls le fonctionnement de leur retour de force.
 
-Le gain initial est de 35 %. Vérifier sur le G29 que l'effort ramène le volant vers la trajectoire ; si son sens est inversé, arrêter l'essai et changer `ffb_invert`. Les forces sont arrêtées dans les menus, à la pause, à la perte de focus, en replay et à la déconnexion. Chaque effet expire après 120 ms sans renouvellement. La déconnexion en conduite libère l'accélérateur et applique le frein.
+Le gain initial de cette révision est de 60 %. Vérifier sur le G29 que l'effort ramène le volant vers la trajectoire ; si son sens est inversé, arrêter l'essai et changer `ffb_invert`. Les forces sont arrêtées dans les menus, à la pause, à la perte de focus, en replay et à la déconnexion. Chaque effet expire après 120 ms sans renouvellement. La déconnexion en conduite libère l'accélérateur et applique le frein.
 
 ## Replays et compatibilité
 
 Les replays enregistrés au volant utilisent le fichier du jeu **et son compagnon `.wheel`**. Il contient les commandes finales à chaque pas de simulation (braquage, propulsion, pédales, rapport, régime et burnout), sans la compression de direction originale. La lecture fonctionne sans volant branché et sans reprendre les réglages de transmission actuels.
 
-Conserver les deux fichiers ensemble. Le replay est marqué pour refuser une lecture sans son compagnon ; la somme de contrôle l'associe au bon fichier de base. Ces replays nécessitent cette version du jeu. Les anciens replays restent acceptés. Les replays sur carte mémoire, dépourvus de fichier compagnon, ne prennent pas en charge ce mode. La durée supplémentaire est limitée à deux heures.
+Conserver les deux fichiers ensemble. Le replay est marqué pour refuser une lecture sans son compagnon ; la somme de contrôle l'associe au bon fichier de base. Ces replays nécessitent cette version du jeu. Les anciens replays natifs restent acceptés ; les compagnons expérimentaux version 1 doivent être utilisés avec la branche de base. Les replays sur carte mémoire, dépourvus de fichier compagnon, ne prennent pas en charge ce mode. La durée supplémentaire est limitée à deux heures.
 
 La couche PlayStation et les contrôles habituels sont conservés quand le mode volant n'est pas actif. Un correctif de deux points dans PsyCross empêche la destruction des handles haptiques au branchement d'une manette et évite l'envoi de vibrations de gamepad au volant. Il est conservé dans `patches/psycross-wheel.patch` et appliqué par le script de compilation ; le sous-module apparaît donc modifié localement, sans changer sa référence upstream.
 

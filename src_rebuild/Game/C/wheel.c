@@ -33,6 +33,7 @@ racing::Transmission transmissions[MAX_CARS];
 std::vector<Frame> frames;
 bool overflow=false;
 float aligning=0, bumps=0;
+int frontContacts=0;
 const size_t frameLimit=216000; // Two hours at the game's 30 Hz simulation rate.
 unsigned checksum(const void* data,int size) {
     const unsigned char* p=static_cast<const unsigned char*>(data);unsigned hash=2166136261u;
@@ -41,19 +42,19 @@ unsigned checksum(const void* data,int size) {
 bool validCar(const CAR_DATA* cp){return cp && cp->id>=0 && cp->id<MAX_CARS;}
 void apply(CAR_DATA* cp,const Frame& f){
     cp->wheel_angle=f.steer;cp->thrust=f.thrust;cp->hd.autoBrake=0;
-    cp->handbrake=0; // Applied progressively at the wheels instead of the legacy lock.
-    cp->wheelspin=(f.flags&2)!=0;cp->hd.revs=f.rpm;cp->hd.gear=0;cp->hd.changingGear=0;
+    cp->handbrake=(f.flags&16)!=0;
+    cp->wheelspin=!cp->handbrake && (f.flags&2)!=0;cp->hd.revs=f.rpm;cp->hd.gear=0;cp->hd.changingGear=0;
 }
 }
 void Wheel_GameReset(int car){if(car>=0 && car<MAX_CARS){state[car]=Frame();transmissions[car].reset();}}
 bool Wheel_GameActive(const CAR_DATA* cp){return validCar(cp) && (state[cp->id].flags&1)!=0;}
 float Wheel_GameBrake(const CAR_DATA* cp){return Wheel_GameActive(cp)?state[cp->id].brake/65535.f:0;}
-float Wheel_GameHandbrake(const CAR_DATA* cp){return Wheel_GameActive(cp)?state[cp->id].handbrake/65535.f:0;}
+float Wheel_GameHandbrake(const CAR_DATA* cp){return Wheel_GameActive(cp) && (state[cp->id].flags&16)?1.f:0;}
 int Wheel_GameGear(const CAR_DATA* cp){return Wheel_GameActive(cp)?state[cp->id].gear:0;}
 int Wheel_GameRPM(const CAR_DATA* cp){return Wheel_GameActive(cp)?state[cp->id].rpm:0;}
 void Wheel_GameApply(CAR_DATA* cp){
     if(!validCar(cp))return;
-    Frame& f=state[cp->id];bool wasActive=(f.flags&1)!=0;f.flags=0;
+    Frame& f=state[cp->id];bool wasActive=(f.flags&1)!=0;bool wasHandbrake=(f.flags&16)!=0;f.flags=0;
     if(cp->controlType!=CONTROL_TYPE_PLAYER || GetPlayerId(cp)!=0)return;
     if(NoPlayerControl){
         if(CameraCnt>=0 && size_t(CameraCnt)<frames.size() && frames[CameraCnt].frame==CameraCnt && frames[CameraCnt].car==cp->id){f=frames[CameraCnt];if(f.flags&1)apply(cp,f);}
@@ -79,6 +80,7 @@ void Wheel_GameApply(CAR_DATA* cp){
     f.throttle=static_cast<uint16_t>(input.throttle*65535);f.brake=static_cast<uint16_t>(input.brake*65535);
     f.clutch=static_cast<uint16_t>(input.clutch*65535);f.handbrake=static_cast<uint16_t>(input.handbrake*65535);
     f.flags=1|(output.burnout?2:0)|(output.stalled?4:0)|(output.rejectedShift?8:0);
+    if(wasHandbrake ? input.handbrake>g_wheelSettings.handbrakeOff : input.handbrake>=g_wheelSettings.handbrakeOn) f.flags|=16;
     apply(cp,f);
     if(CameraCnt>=0 && size_t(CameraCnt)<frameLimit){if(frames.size()<=size_t(CameraCnt))frames.resize(CameraCnt+1);frames[CameraCnt]=f;}
     else overflow=true;
@@ -87,15 +89,22 @@ void Wheel_GameContact(CAR_DATA* cp,int wheel,int lateral,int bump,int surface){
     if(!Wheel_GameActive(cp) || NoPlayerControl || GetPlayerId(cp)!=0)return;
     if((wheel&1)==0){
         // Approximate aligning moment from the actual front tyre lateral forces.
-        aligning+=racing::clamp(lateral/16000.f,-.5f,.5f);
+        aligning+=racing::clamp(lateral/4000.f,-.5f,.5f);
+        ++frontContacts;
         bumps+=racing::clamp(bump/120.f,-.25f,.25f);
         if(surface&0x80)bumps+=((CameraCnt&1)?1:-1)*.08f;
     }
 }
 void Wheel_GameFeedback(){
-    if(!pauseflag && !NoPlayerControl && MainPlayer.playerType==PLAYER_TYPE_CAR && MainPlayer.playerCarId>=0 && MainPlayer.playerCarId<MAX_CARS && Wheel_GameActive(&car_data[MainPlayer.playerCarId])) Wheel_Force(aligning,bumps);
+    if(!pauseflag && !NoPlayerControl && MainPlayer.playerType==PLAYER_TYPE_CAR && MainPlayer.playerCarId>=0 && MainPlayer.playerCarId<MAX_CARS && Wheel_GameActive(&car_data[MainPlayer.playerCarId])) {
+        const CAR_DATA* car=&car_data[MainPlayer.playerCarId];
+        float load=frontContacts?1.f:0.f;
+        float speed=racing::clamp(car->hd.speed/60.f,.15f,1);
+        float steer=state[car->id].steer/(racing::clamp(g_wheelSettings.steeringLock,10,45)*4096/360);
+        Wheel_Force(aligning-steer*speed*load*racing::clamp(g_wheelSettings.centering,0,1.5f),bumps);
+    }
     else Wheel_Stop();
-    aligning=0;bumps=0;
+    aligning=0;bumps=0;frontContacts=0;
 }
 void Wheel_GameHUD(){
     int id=MainPlayer.playerCarId;if(id<0 || id>=MAX_CARS || !Wheel_GameActive(&car_data[id]))return;
@@ -111,7 +120,7 @@ bool Wheel_ReplaySave(const char* path,const void* base,int size){
     if(frames.empty())return true;
     std::string name=std::string(path)+".wheel";
     FILE* file=fopen(name.c_str(),"wb");if(!file)return false;
-    const uint32_t header[]={0x314c4857,1,checksum(base,size),static_cast<uint32_t>(frames.size()),sizeof(Frame)};
+    const uint32_t header[]={0x314c4857,2,checksum(base,size),static_cast<uint32_t>(frames.size()),sizeof(Frame)};
     bool ok=fwrite(header,sizeof(header),1,file)==1;
     if(!frames.empty())ok=fwrite(frames.data(),sizeof(Frame),frames.size(),file)==frames.size() && ok;
     if(fclose(file))ok=false;return ok;
@@ -122,7 +131,7 @@ bool Wheel_ReplayLoad(const char* path,const void* base,int size){
     if(magic!=WHEEL_REPLAY_MAGIC)return true; // Ignore stale companions of legacy replays.
     std::string name=std::string(path)+".wheel";FILE* file=fopen(name.c_str(),"rb");
     if(!file){printError("Missing required wheel replay: %s\n",name.c_str());return false;}
-    uint32_t h[5]={};bool ok=fread(h,sizeof(h),1,file)==1 && h[0]==0x314c4857 && h[1]==1 && h[2]==checksum(base,size) && h[3]<=frameLimit && h[4]==sizeof(Frame);
+    uint32_t h[5]={};bool ok=fread(h,sizeof(h),1,file)==1 && h[0]==0x314c4857 && h[1]==2 && h[2]==checksum(base,size) && h[3]<=frameLimit && h[4]==sizeof(Frame);
     if(ok){frames.resize(h[3]);ok=frames.empty()||fread(frames.data(),sizeof(Frame),frames.size(),file)==frames.size();}
     fclose(file);
     if(ok)for(size_t i=0;i<frames.size();++i){const Frame& f=frames[i];if(f.flags&1)if(f.frame!=int(i)||f.car<0||f.car>=MAX_CARS||f.gear<-1||f.gear>5||std::abs(int(f.steer))>512||std::abs(int(f.thrust))>15000||f.rpm<0||f.rpm>32000){ok=false;break;}}
