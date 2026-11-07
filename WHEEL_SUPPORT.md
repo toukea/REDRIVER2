@@ -11,7 +11,7 @@ La base testée est conservée sur `wheel-controller` (`a423d93e`). Cette branch
 
 Les nouveaux replays portent la version 2 du compagnon `.wheel`. Les compagnons expérimentaux version 1 sont refusés car la physique a changé ; les replays natifs sans compagnon restent compatibles. Les sections ci-dessous décrivent aussi la version initiale et son processus d'installation.
 
-Cette première implémentation vise Windows et le Logitech G29 avec pédalier et shifter. La compilation et les tests automatisés sont vérifiés ; le matériel n'était pas disponible pendant le développement. Le sens du retour de force, les numéros d'axes/boutons et le comportement en conduite restent à valider sur le G29. La physique reste celle de Driver 2, enrichie d'une transmission simplifiée ; elle n'a pas la précision d'Assetto Corsa.
+Cette implémentation vise Windows et le Logitech G29 avec pédalier et shifter. Le matériel, indisponible au début, a ensuite servi à identifier séparément les pédales et à réaliser les premiers essais de conduite. Les corrections de cette branche passent 75 contrôles automatisés, mais leur comportement en conduite et leur retour de force restent à revalider. La physique reste celle de Driver 2, enrichie d'une transmission simplifiée ; elle n'a pas la précision d'Assetto Corsa. Pour reprendre le développement sans l'historique du chat, lire [le document technique de reprise](docs/AGENT_HANDOFF.md).
 
 ## Démarrage
 

@@ -36,6 +36,8 @@ See [Wiki/Installation Instructions](https://github.com/OpenDriver2/REDRIVER2/wi
 ### Racing wheel branch
 G29 wheel, pedals, H-pattern shifter, calibration and force-feedback implementation: [setup and current validation status](WHEEL_SUPPORT.md).
 
+For development context, architecture, branch history, replay format and remaining hardware tests, start with [AGENTS.md](AGENTS.md) and the [technical handoff](docs/AGENT_HANDOFF.md).
+
 ### How can I contribute?
 See [Contributing to project](https://github.com/OpenDriver2/REDRIVER2/wiki/Contributing-to-project) page
 
