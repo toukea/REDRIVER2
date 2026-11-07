@@ -92,7 +92,26 @@ int main(int argc,char** argv){
     g_wheelSettings.rotation=450;Wheel_SampleDevices(input);require(input.steering>.99f,"reduced rotation maps to earlier lock");
     // No physical window or focus is acquired by this automated test.
     Wheel_Poll(true);require(!Wheel_Read(input),"no force or input without keyboard focus");
-    Wheel_Shutdown();SDL_JoystickClose(joystick);
+    Wheel_Shutdown();
+    {
+        // Configuration tool smoke test: force feedback tab, preset, slider, toggle and save.
+        auto key=[](SDL_Keycode k,Uint16 mod=0){SDL_Event e;SDL_zero(e);e.type=SDL_KEYDOWN;e.key.keysym.sym=k;e.key.keysym.mod=mod;SDL_PushEvent(&e);};
+        const char* uiPath="src_rebuild/bin/tests/wheel-ui.ini";
+        SDL_FlushEvents(SDL_FIRSTEVENT,SDL_LASTEVENT);
+        key(SDLK_TAB);key(SDLK_F1);key(SDLK_DOWN);key(SDLK_RIGHT);key(SDLK_RIGHT,KMOD_SHIFT);
+        for(int i=0;i<11;++i)key(SDLK_DOWN); // last row: telemetry toggle
+        key(SDLK_RIGHT);key(SDLK_s);
+        SDL_Event quit;SDL_zero(quit);quit.type=SDL_QUIT;SDL_PushEvent(&quit);
+        g_wheelSettings.ffbLog=0;
+        require(Wheel_Configure(uiPath)==0,"configuration window runs headless");
+        require(std::fabs(g_wheelSettings.force.gain-.65f)<.001f,"F1 applies the soft preset");
+        require(std::fabs(g_wheelSettings.force.filter-.66f)<.001f,"arrow keys adjust the selected slider, shift for fine steps");
+        require(g_wheelSettings.ffbLog==1,"toggle rows switch with the arrow keys");
+        g_wheelSettings=WheelSettings();Wheel_LoadConfig(uiPath);
+        require(std::fabs(g_wheelSettings.force.gain-.65f)<.001f && g_wheelSettings.ffbLog==1,"force feedback tab saves wheel.ini");
+        remove(uiPath);remove("src_rebuild/bin/tests/wheel-ui.ini.bak");
+    }
+    SDL_JoystickClose(joystick);
     require(SDL_JoystickDetachVirtual(index)==0,"detach virtual wheel");
     remove(path);remove("src_rebuild/bin/tests/wheel-roundtrip.ini.bak");
     SDL_Quit();printf("PASS: %d SDL device lifecycle and configuration checks\n",tests);

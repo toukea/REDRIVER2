@@ -32,7 +32,7 @@ try {
     if ($LASTEXITCODE) { throw 'Wheel game test compilation failed.' }
     & .\src_rebuild\bin\tests\wheel_game_tests.exe
     if ($LASTEXITCODE) { throw 'Wheel game integration tests failed.' }
-    & cmd.exe /d /c "`"$vcvars`" >nul && `"$cl`" /nologo /EHsc /std:c++14 /TP /D_CRT_SECURE_NO_WARNINGS /Isrc_rebuild\dependencies\SDL2-2.30.2\include tests\wheel_runtime_tests.cpp src_rebuild\utils\wheel.cpp src_rebuild\utils\ini.c /Fesrc_rebuild\bin\tests\wheel_runtime_tests.exe /Fosrc_rebuild\bin\tests\ /link src_rebuild\dependencies\SDL2-2.30.2\lib\x64\SDL2.lib"
+    & cmd.exe /d /c "`"$vcvars`" >nul && `"$cl`" /nologo /EHsc /std:c++14 /TP /D_CRT_SECURE_NO_WARNINGS /Isrc_rebuild\dependencies\SDL2-2.30.2\include tests\wheel_runtime_tests.cpp src_rebuild\utils\wheel.cpp src_rebuild\utils\wheel_ui.cpp src_rebuild\utils\ini.c /Fesrc_rebuild\bin\tests\wheel_runtime_tests.exe /Fosrc_rebuild\bin\tests\ /link src_rebuild\dependencies\SDL2-2.30.2\lib\x64\SDL2.lib"
     if ($LASTEXITCODE) { throw 'Wheel SDL test compilation failed.' }
     Copy-Item src_rebuild/dependencies/SDL2-2.30.2/lib/x64/SDL2.dll src_rebuild/bin/tests/
     & .\src_rebuild\bin\tests\wheel_runtime_tests.exe

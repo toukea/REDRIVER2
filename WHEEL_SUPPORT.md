@@ -89,6 +89,17 @@ Le couple ressenti est calculé à partir des pneus avant du moteur physique de 
 | `ffb_hud` | 1 | Affiche `FFB <niveau> GRIP <glissement avant> CLIP` | 0 pour masquer |
 | `ffb_log` | 0 | Écrit `data/ffb_telemetry.csv` (20 min max) | 1 pour une session d'analyse |
 
+### Réglage dans WheelConfig (onglet Retour de force)
+
+Dans `calibrate-wheel.cmd`, la touche **Tab** bascule entre les entrées et l'onglet **Retour de force**, conçu sur le modèle de Content Manager :
+
+- curseurs pour les dix paramètres : Haut/Bas pour choisir, Gauche/Droite pour régler (Maj pour un pas fin), ou clic et glissement à la souris ; interrupteurs inversion, affichage en jeu et télémétrie ;
+- préréglages **F1 Doux**, **F2 Équilibré** (défaut), **F3 Réaliste**, **F4 Fort**, et **R** pour revenir au défaut ;
+- **courbe de réponse** en direct : force envoyée au volant selon le glissement avant (jaune : normal, bleu : au freinage, trait vertical : limite d'adhérence, pointillés : début de compression) ;
+- **P** : aperçu au volant, qui simule un virage avec les réglages courants (tourner le volant pour sentir le poids, l'allègement après la limite, l'amortissement et le frottement) ; **V** change la vitesse simulée (0, 54, 108 km/h) ;
+- **D** : détection automatique du sens. Lâcher le volant au centre : une courte poussée est envoyée et `ffb_invert` est réglé selon le mouvement mesuré ;
+- **S** enregistre `wheel.ini`. Si le jeu est ouvert en même temps, il applique la modification en moins d'une seconde.
+
 **Réglage à chaud :** `data/wheel.ini` est relu automatiquement moins d'une seconde après son enregistrement, pendant la conduite. On peut ajuster un paramètre, sauvegarder, et ressentir le changement sans relancer le jeu. L'ancienne clé `ffb_centering` est ignorée : un ressort vers le centre contredit le contre-braquage en glisse.
 
 **Logitech G HUB :** désactiver « Ressort de centrage dans les jeux avec retour de force », Sensibilité 50, Intensité au maximum, plage 900°. Le jeu règle aussi le gain matériel à 100 % et désactive l'autocentrage.
