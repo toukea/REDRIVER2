@@ -13,6 +13,9 @@
 #include "glaunch.h"
 #include "system.h"
 #include "cutscene.h"
+#ifndef PSX
+#include "wheel.h"
+#endif
 
 #define GRAVITY_FORCE		(-7456)			// D1 has -10922
 
@@ -61,6 +64,19 @@ void GetFrictionScalesDriver1(CAR_DATA* cp, CAR_LOCALS* cl, int* frontFS, int* r
 	_HANDLING_TYPE* hp;
 
 	hp = &handlingType[cp->hndType];
+
+#ifndef PSX
+	if (Wheel_GameActive(cp))
+	{
+		*frontFS = 937 * hp->frictionScaleRatio / 32;
+		*rearFS = (cp->wheelspin ? 560 : 983) * hp->frictionScaleRatio / 32;
+		*frontFS = FIXEDH(*frontFS * cp->ap.carCos->traction);
+		*rearFS = FIXEDH(*rearFS * cp->ap.carCos->traction);
+		for (int w = 0; w < 4; ++w)
+			cp->hd.wheel[w].locked = Wheel_GameBrake(cp) > .98f || ((w & 1) && Wheel_GameHandbrake(cp) > .98f);
+		return;
+	}
+#endif
 
 	if (cp->thrust < 0)
 		*frontFS = 1453;
@@ -462,6 +478,21 @@ void AddWheelForcesDriver1(CAR_DATA* cp, CAR_LOCALS* cl)
 
 			}
 
+#ifndef PSX
+			if (Wheel_GameActive(cp))
+			{
+				int bx = (i & 1) ? cdx : sdx;
+				int bz = (i & 1) ? cdz : sdz;
+				int longitudinal = FIXEDH((long long)pointVel[0] * bx + (long long)pointVel[2] * bz);
+				float amount = Wheel_GameBrake(cp) * .5f + ((i & 1) ? Wheel_GameHandbrake(cp) : 0);
+				int braking = int(amount * 5000);
+				braking = int(braking * MIN(1.f, ABS(longitudinal) / 8192.f));
+				if (longitudinal < 0) braking = -braking;
+				force.vx -= bx * braking;
+				force.vz -= bz * braking;
+				Wheel_GameContact(cp, i, sidevel, newCompression - oldCompression, wheel->surface);
+			}
+#endif
 			force.vx += (susForce * surfaceNormal[0] - sidevel * lfx) - cl->vel[0] * 12;
 			force.vz += (susForce * surfaceNormal[2] - sidevel * lfz) - cl->vel[2] * 12;
 

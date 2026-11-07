@@ -15,6 +15,9 @@
 #include "camera.h"
 #include "felony.h"
 #include "scores.h"
+#ifndef PSX
+#include "wheel.h"
+#endif
 
 COLOUR_BAND felonyColour[3] =
 {
@@ -696,6 +699,10 @@ void DisplayOverlays(void)
 
 	if (NoPlayerControl || gInGameCutsceneActive || gInGameCutsceneDelay)
 		return;
+
+#ifndef PSX
+	Wheel_GameHUD();
+#endif
 
 	if (NumPlayers > 1)
 	{

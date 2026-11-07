@@ -22,6 +22,9 @@
 #include "glaunch.h"
 #include "shadow.h"
 #include "players.h"
+#ifndef PSX
+#include "wheel.h"
+#endif
 
 struct BOUND_BOX
 {
@@ -49,6 +52,9 @@ inline void UpdateCarDrawMatrix(CAR_DATA* cp)
 // [D] [T]
 void InitCarPhysics(CAR_DATA* cp, LONGVECTOR4* startpos, int direction)
 {
+#ifndef PSX
+	Wheel_GameReset(cp->id);
+#endif
 	int ty;
 	int odz;
 	int dz;
@@ -1351,6 +1357,9 @@ void ProcessCarPad(CAR_DATA* cp, u_int pad, char PadSteer, char use_analogue)
 	}
 
 	cp->lastPad = pad;
+#ifndef PSX
+	Wheel_GameApply(cp);
+#endif
 }
 
 

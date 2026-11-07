@@ -1,4 +1,7 @@
 #include "driver2.h"
+#ifndef PSX
+#include "wheel.h"
+#endif
 #include "cars.h"
 #include "texture.h"
 #include "overmap.h"
@@ -859,6 +862,14 @@ void PlayerCarFX(CAR_DATA *cp)
 			AddIndicatorLight(cp, 1);
 	}
 
+#ifndef PSX
+	if (Wheel_GameActive(cp))
+	{
+		if (Wheel_GameBrake(cp) > .05f) AddBrakeLight(cp);
+		if (Wheel_GameGear(cp) < 0) AddReverseLight(cp);
+		return;
+	}
+#endif
 	if( WheelSpeed < 0 && cp->thrust > 0 ||
 		WheelSpeed > 0 && cp->thrust < 0)
 	{

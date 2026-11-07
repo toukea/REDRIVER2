@@ -59,6 +59,9 @@
 #include "platform.h"
 #include "state.h"
 #include "cutrecorder.h"
+#ifndef PSX
+#include "wheel.h"
+#endif
 
 int levelstartpos[8][4] = {
 	{ 4785, -1024, -223340, 0},
@@ -1137,6 +1140,9 @@ void StepSim(void)
 	}
 
 	GlobalTimeStep();
+#ifndef PSX
+	Wheel_GameFeedback();
+#endif
 	UpdatePlayers();
 	DoScenaryCollisions();
 	CheckPlayerMiscFelonies();

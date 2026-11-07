@@ -7,6 +7,9 @@
 #include "main.h"
 #include "players.h"
 #include "cars.h"
+#ifndef PSX
+#include "../../utils/wheel.h"
+#endif
 
 #include <libpad.h>
 
@@ -451,6 +454,16 @@ void ReadControllers(void)
 
 		pad++;
 	} while (pad < 2);
+
+#ifndef PSX
+	Wheel_Poll(!gInFrontend && !NoPlayerControl && !gDrawPauseMenus && !pauseflag && !game_over && !gInGameCutsceneActive && !gStopPadReads);
+	unsigned wheelEdges;
+	unsigned wheelButtons = Wheel_Buttons(wheelEdges);
+	Pads[0].direct |= wheelButtons;
+	Pads[0].dirnew |= wheelEdges;
+	Pads[0].mapped |= wheelButtons;
+	Pads[0].mapnew |= wheelEdges;
+#endif
 
 	HandleDualShock();
 	pad_connected = (Pads[0].type != 0);

@@ -11,6 +11,9 @@
 #include "camera.h"
 #include "civ_ai.h"
 #include "cutrecorder.h"
+#ifndef PSX
+#include "wheel.h"
+#endif
 
 char AnalogueUnpack[16] = { 
 	0, -51, -63, -75, -87, -99, -111, -123,
@@ -60,6 +63,9 @@ void InitPadRecording(void)
 		CurrentGameMode != GAMEMODE_DIRECTOR)
 	{
 		NumReplayStreams = 0;
+#ifndef PSX
+		Wheel_ReplayReset();
+#endif
 
 		ReplayStart = (char*)_replay_buffer;
 		ReplayParameterPtr = (REPLAY_PARAMETER_BLOCK *)ReplayStart;
@@ -120,6 +126,9 @@ int SaveReplayToBuffer(char *buffer)
 	pt += sizeof(REPLAY_SAVE_HEADER);
 
 	header->magic = DRIVER2_REPLAY_MAGIC;
+#ifndef PSX
+	if (Wheel_ReplayHasFrames()) header->magic = WHEEL_REPLAY_MAGIC;
+#endif
 	header->GameLevel = GameLevel;
 	header->GameType = GameType;
 	header->MissionNumber = gCurrentMissionNumber;
@@ -187,6 +196,9 @@ int SaveReplayToBuffer(char *buffer)
 // [D] [T]
 int LoadReplayFromBuffer(char *buffer)
 {
+#ifndef PSX
+	Wheel_ReplayReset();
+#endif
 	REPLAY_SAVE_HEADER *header;
 	REPLAY_STREAM_HEADER *sheader;
 
@@ -194,7 +206,11 @@ int LoadReplayFromBuffer(char *buffer)
 
 	header = (REPLAY_SAVE_HEADER*)pt;
 
-	if (header->magic != DRIVER2_REPLAY_MAGIC)
+	if (header->magic != DRIVER2_REPLAY_MAGIC
+#ifndef PSX
+		&& header->magic != WHEEL_REPLAY_MAGIC
+#endif
+		)
 		return 0;
 
 	ReplayStart = replayptr = (char*)_replay_buffer;

@@ -1,0 +1,22 @@
+diff --git a/src/pad/PsyX_pad.cpp b/src/pad/PsyX_pad.cpp
+--- a/src/pad/PsyX_pad.cpp
++++ b/src/pad/PsyX_pad.cpp
+@@ -150,9 +150,7 @@ void PsyX_Pad_Event_ControllerAdded(Sint32 deviceId)
+ 	int i;
+ 	PsyXController* controller;
+ 
+-	// reinitialize haptics (why we still here?)
+-	SDL_QuitSubSystem(SDL_INIT_HAPTIC);			// FIXME: this will crash if you already have haptics
+-	SDL_InitSubSystem(SDL_INIT_HAPTIC);
++	// Haptic handles are owned by their users. Hotplug must not destroy them.
+ 
+ 	PsyX_Pad_Debug_ListControllers();
+ 
+@@ -442,5 +440,7 @@ void PsyX_Pad_Vibrate(int mtap, int slot, unsigned char* table, int len)
+ {
+ 	PsyXController* controller = &g_controllers[slot];
++	if (!controller->gc || SDL_JoystickGetType(SDL_GameControllerGetJoystick(controller->gc)) == SDL_JOYSTICK_TYPE_WHEEL)
++		return;
+ 
+ 	if (len == 0)
+ 		return;

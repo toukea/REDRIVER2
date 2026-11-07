@@ -2,6 +2,9 @@
 
 #include "driver2.h"
 #include "gamesnd.h"
+#ifndef PSX
+#include "wheel.h"
+#endif
 
 #include "sound.h"
 #include "system.h"
@@ -753,6 +756,13 @@ void ControlCarRevs(CAR_DATA* cp)
 	if (maxrevrise < desiredRevs)
 		newRevs = oldRevs + maxrevrise;
 
+#ifndef PSX
+	if (Wheel_GameActive(cp))
+	{
+		newRevs = Wheel_GameRPM(cp);
+		cp->hd.changingGear = 0;
+	}
+#endif
 	cp->hd.revs = newRevs;
 	if (player_id != -1)
 	{

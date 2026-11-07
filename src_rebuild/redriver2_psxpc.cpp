@@ -1,7 +1,9 @@
 ﻿// redriver2_psxpc.cpp
 //
 
+#define SDL_MAIN_HANDLED
 #include <SDL_keyboard.h>
+#include <SDL.h>
 
 #include "platform.h"
 
@@ -22,6 +24,7 @@
 #include "C/draw.h"
 
 #include "utils/ini.h"
+#include "utils/wheel.h"
 
 #include <SDL_scancode.h>
 #include <SDL_gamecontroller.h>
@@ -472,6 +475,7 @@ void SwitchMappings(int menu)
 
 int main(int argc, char** argv)
 {
+	SDL_SetMainReady();
 	ini_t* config;
 
 #if USE_CRT_MALLOC
@@ -633,7 +637,22 @@ int main(int argc, char** argv)
 
 #endif
 
+	Wheel_LoadConfig("wheel.ini");
+	for (int i = 0; i < argc; ++i)
+	{
+		const char* programName = strrchr(argv[i], '\\');
+		programName = programName ? programName + 1 : argv[i];
+		if ((i > 0 && !strcmp(argv[i], "-wheel-config")) || (i == 0 && !SDL_strcasecmp(programName, "WheelConfig.exe")))
+		{
+			if (config) ini_free(config);
+			if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_HAPTIC)) return 1;
+			int result = Wheel_Configure();
+			SDL_Quit();
+			return result;
+		}
+	}
 	PsyX_Initialise("REDRIVER2", fullScreen ? screenWidth : windowWidth, fullScreen ? screenHeight : windowHeight, fullScreen);
+	Wheel_Init();
 
 	char version_info[32];
 	GetTimeStamp(version_info);
@@ -661,6 +680,7 @@ int main(int argc, char** argv)
 
 	DeinitStringMng();
 
+	Wheel_Shutdown();
 	PsyX_Shutdown();
 
 	return 0;

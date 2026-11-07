@@ -1,4 +1,7 @@
 #include "driver2.h"
+#ifndef PSX
+#include "wheel.h"
+#endif
 #include "loadsave.h"
 #include "replays.h"
 #include "system.h"
@@ -313,6 +316,7 @@ int LoadReplayFromFile(char* fileName)
 
 		if (LoadReplayFromBuffer((char*)_other_buffer))
 		{
+			if (!Wheel_ReplayLoad(fileName, (char*)_other_buffer, replay_size)) return 0;
 			char* sub, *tmp;
 
 			// only filename
@@ -353,9 +357,9 @@ int SaveReplayToFile(char* filename)
 	FILE* fp = fopen(filename, "wb");
 	if (fp)
 	{
-		fwrite((char*)_other_buffer, 1, size, fp);
-		fclose(fp);
-		return 1;
+		bool written = fwrite((char*)_other_buffer, 1, size, fp) == size;
+		if (fclose(fp)) written = false;
+		return written && Wheel_ReplaySave(filename, (char*)_other_buffer, size);
 	}
 
 	return 0;
@@ -372,6 +376,10 @@ int CalcReplayDataSize(void)
 // [D] [T]
 int SaveReplayData(char* buffer)
 {
+#ifndef PSX
+	// Memory-card replays have no companion file for high-resolution controls.
+	if (Wheel_ReplayHasFrames()) return 0;
+#endif
 	return SaveReplayToBuffer(buffer);
 }
 
@@ -379,6 +387,9 @@ int SaveReplayData(char* buffer)
 // [D] [T]
 int LoadReplayData(char* buffer)
 {
+#ifndef PSX
+	if (((REPLAY_SAVE_HEADER*)buffer)->magic == WHEEL_REPLAY_MAGIC) return 0;
+#endif
 	return LoadReplayFromBuffer(buffer);
 }
 
