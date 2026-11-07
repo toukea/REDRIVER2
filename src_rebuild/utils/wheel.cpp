@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 WheelSettings g_wheelSettings;
 namespace {
@@ -13,8 +15,41 @@ int effectId = -1;
 SDL_HapticEffect effect = {};
 bool active = false, initialized = false;
 Uint32 lastScan = 0;
-float filteredForce = 0, previousSteer = 0;
-bool forcePrimed = false;
+float previousSteer = 0;
+bool forcePrimed = false, forceRunning = false;
+// Passive condition effects run inside the wheel firmware at its own rate,
+// which the 30 Hz game loop cannot match for damping without oscillating.
+int damperId = -1, frictionId = -1;
+float damperLevel = -1, frictionLevel = -1; // -1 = not running
+racing::ForceShaper shaper;
+std::string configPath;
+long long configStamp = 0;
+Uint32 lastConfigCheck = 0;
+long long fileStamp(const char* path) {
+    struct stat st;
+    if (!path || !*path || stat(path,&st)) return 0;
+    return (long long)st.st_mtime * 1000003LL + (long long)st.st_size;
+}
+SDL_HapticEffect conditionEffect(Uint16 type, float level) {
+    SDL_HapticEffect e = SDL_HapticEffect();
+    e.type = type;
+    e.condition.direction.type = SDL_HAPTIC_CARTESIAN;
+    e.condition.direction.dir[0] = 1;
+    e.condition.length = SDL_HAPTIC_INFINITY;
+    e.condition.right_sat[0] = e.condition.left_sat[0] = 0xFFFF;
+    e.condition.right_coeff[0] = e.condition.left_coeff[0] = static_cast<Sint16>(racing::clamp(level,0,1)*32767);
+    return e;
+}
+void updateCondition(int id, Uint16 type, float level, float& current) {
+    if (!haptic || id < 0) return;
+    if (current >= 0 && std::fabs(level-current) < .01f) return;
+    SDL_HapticEffect e = conditionEffect(type,level);
+    if (SDL_HapticUpdateEffect(haptic,id,&e) < 0 || (current < 0 && SDL_HapticRunEffect(haptic,id,1) < 0)) {
+        static bool reported=false; if(!reported){SDL_Log("Wheel condition effect failed: %s",SDL_GetError());reported=true;}
+        return;
+    }
+    current = level;
+}
 const char* axisNames[5] = {"steering", "throttle", "brake", "clutch", "handbrake"};
 const char* guidNames[4] = {"guid", "pedals_guid", "shifter_guid", "handbrake_guid"};
 int* deviceSetting(int i) {
@@ -27,8 +62,13 @@ char* guidSetting(int i) {
 }
 void closeDevices() {
     Wheel_Stop();
-    if (haptic) { if (effectId >= 0) SDL_HapticDestroyEffect(haptic,effectId); SDL_HapticClose(haptic); }
-    haptic = nullptr; effectId = -1;
+    if (haptic) {
+        if (effectId >= 0) SDL_HapticDestroyEffect(haptic,effectId);
+        if (damperId >= 0) SDL_HapticDestroyEffect(haptic,damperId);
+        if (frictionId >= 0) SDL_HapticDestroyEffect(haptic,frictionId);
+        SDL_HapticClose(haptic);
+    }
+    haptic = nullptr; effectId = damperId = frictionId = -1;
     for (auto& device : devices) { if (device) SDL_JoystickClose(device); device = nullptr; }
 }
 int findDevice(int group) {
@@ -71,7 +111,17 @@ void scan() {
     // Short effects expire even if the simulation stops updating unexpectedly.
     effect.constant.length = 120;
     effectId = SDL_HapticNewEffect(haptic,&effect);
-    if (effectId < 0) SDL_Log("Wheel FFB effect failed: %s",SDL_GetError());
+    if (effectId < 0) { SDL_Log("Wheel FFB effect failed: %s",SDL_GetError()); return; }
+    unsigned features = SDL_HapticQuery(haptic);
+    if (features & SDL_HAPTIC_DAMPER) {
+        SDL_HapticEffect e = conditionEffect(SDL_HAPTIC_DAMPER,0);
+        damperId = SDL_HapticNewEffect(haptic,&e);
+    }
+    if (features & SDL_HAPTIC_FRICTION) {
+        SDL_HapticEffect e = conditionEffect(SDL_HAPTIC_FRICTION,0);
+        frictionId = SDL_HapticNewEffect(haptic,&e);
+    }
+    SDL_Log("Wheel FFB: constant force%s%s",damperId >= 0 ? " + damper" : " (software damping)",frictionId >= 0 ? " + friction" : "");
 }
 int groupForAxis(int a) { return a == 0 ? 0 : a == 4 ? 3 : 1; }
 float axisValue(int a) {
@@ -89,8 +139,14 @@ void Wheel_Init() {
     if (initialized && g_wheelSettings.enabled) scan();
 }
 void Wheel_Stop() {
-    if (haptic && effectId >= 0) SDL_HapticStopEffect(haptic,effectId);
-    filteredForce = 0;
+    if (haptic && forceRunning) {
+        if (effectId >= 0) SDL_HapticStopEffect(haptic,effectId);
+        if (damperId >= 0) SDL_HapticStopEffect(haptic,damperId);
+        if (frictionId >= 0) SDL_HapticStopEffect(haptic,frictionId);
+    }
+    forceRunning = false;
+    damperLevel = frictionLevel = -1;
+    shaper.reset();
     forcePrimed = false;
 }
 void Wheel_Shutdown() { closeDevices(); initialized=false; active=false; }
@@ -101,6 +157,16 @@ void Wheel_Poll(bool driving) {
     if (detached) closeDevices();
     if (g_wheelSettings.enabled && !devices[0] && SDL_GetTicks()-lastScan > 1000) {
         lastScan=SDL_GetTicks(); scan();
+    }
+    // Live tuning: wheel.ini edited while the game runs is applied within a second.
+    if (!configPath.empty() && SDL_GetTicks()-lastConfigCheck > 1000) {
+        lastConfigCheck = SDL_GetTicks();
+        long long stamp = fileStamp(configPath.c_str());
+        if (stamp && stamp != configStamp) {
+            std::string path = configPath;
+            Wheel_LoadConfig(path.c_str());
+            SDL_Log("Wheel: reloaded %s",path.c_str());
+        }
     }
     active = driving && devices[0] && SDL_GetKeyboardFocus();
     if (!active) Wheel_Stop();
@@ -135,26 +201,37 @@ unsigned Wheel_Buttons(unsigned& edges) {
     }
     edges=bits&~previous;previous=bits;return bits;
 }
-void Wheel_Force(float aligning,float road) {
-    if (!active || !haptic || effectId < 0 || !SDL_GetKeyboardFocus()) { Wheel_Stop(); return; }
-    float steer=axisValue(0);
-    float force = aligning + racing::clamp(road,-1,1)*g_wheelSettings.road - (forcePrimed ? steer-previousSteer : 0)*g_wheelSettings.damping*30;
+racing::ForceReport Wheel_Force(const racing::ForceFrame& frame) {
+    if (!active || !haptic || effectId < 0 || !SDL_GetKeyboardFocus()) { Wheel_Stop(); return racing::ForceReport(); }
+    const racing::ForceSetup& setup = g_wheelSettings.force;
+    const float steer = axisValue(0);
+    racing::ForceReport report = shaper.step(frame,setup);
+    float level = report.output;
+    // A 30 Hz software damper lags; only use it when the firmware has none.
+    if (damperId < 0 && forcePrimed) level -= (steer-previousSteer)*racing::clamp(setup.damping,0,1)*20;
+    // Software end stop for a reduced in-game rotation, always at full strength.
     float lock=racing::clamp(g_wheelSettings.rotation/std::max(180.f,g_wheelSettings.hardwareRotation),.05f,1);
-    if(std::fabs(steer)>lock) force-=(steer>0?1:-1)*racing::clamp((std::fabs(steer)-lock)*15,0,1);
+    if(std::fabs(steer)>lock) level-=(steer>0?1:-1)*racing::clamp((std::fabs(steer)-lock)*15,0,1);
     previousSteer=steer;
     forcePrimed=true;
-    filteredForce += (racing::clamp(force,-1,1)-filteredForce)*racing::clamp(g_wheelSettings.filter,.01f,1);
-    float gain=racing::clamp(g_wheelSettings.gain,0,1);
-    float level=filteredForce*gain;
-    if(std::fabs(level)>.002f) level=(level<0?-1:1)*(racing::clamp(g_wheelSettings.minimumForce,0,.2f)+(1-racing::clamp(g_wheelSettings.minimumForce,0,.2f))*std::fabs(level));
+    level = racing::deadbandCompensate(racing::clamp(level,-1,1),setup.minimum);
     effect.constant.level=static_cast<Sint16>(racing::clamp(level*(g_wheelSettings.forceInvert?-1:1),-1,1)*32767);
+    forceRunning = true;
     if (SDL_HapticUpdateEffect(haptic,effectId,&effect)<0 || SDL_HapticRunEffect(haptic,effectId,1)<0) {
-        static bool reported=false;if(!reported){SDL_Log("Wheel FFB submission failed: %s",SDL_GetError());reported=true;}Wheel_Stop();
+        static bool reported=false;if(!reported){SDL_Log("Wheel FFB submission failed: %s",SDL_GetError());reported=true;}
+        Wheel_Stop(); return racing::ForceReport();
     }
+    const racing::ConditionLevels passive = racing::conditionLevels(frame.speed,setup);
+    updateCondition(damperId,SDL_HAPTIC_DAMPER,passive.damper,damperLevel);
+    updateCondition(frictionId,SDL_HAPTIC_FRICTION,passive.friction,frictionLevel);
+    report.output = level;
+    return report;
 }
 
 void Wheel_LoadConfig(const char* path) {
     ini_t* cfg=ini_load(path); if (!cfg) return;
+    if (configPath != path) configPath = path;
+    configStamp = fileStamp(path);
     auto readInt=[&](const char* key,int& value){ ini_sget(cfg,"wheel",key,"%d",&value); };
     auto readFloat=[&](const char* key,float& value){ float v=value; ini_sget(cfg,"wheel",key,"%f",&v); if(std::isfinite(v)) value=v; };
     readInt("enabled",g_wheelSettings.enabled);
@@ -176,9 +253,20 @@ void Wheel_LoadConfig(const char* path) {
     readInt("handbrake_button",g_wheelSettings.handbrakeButton);
     readInt("ffb_invert",g_wheelSettings.forceInvert);
     readFloat("rotation",g_wheelSettings.rotation); readFloat("hardware_rotation",g_wheelSettings.hardwareRotation); readFloat("steering_lock",g_wheelSettings.steeringLock);
-    readFloat("ffb_gain",g_wheelSettings.gain); readFloat("ffb_damping",g_wheelSettings.damping);
-    readFloat("ffb_road",g_wheelSettings.road); readFloat("ffb_filter",g_wheelSettings.filter);
-    readFloat("ffb_centering",g_wheelSettings.centering);readFloat("ffb_minimum",g_wheelSettings.minimumForce);
+    // FFB model v2. The former ffb_centering (speed spring) is ignored on purpose:
+    // a spring to the centre opposes the countersteer the tyres ask for in a slide.
+    auto& ff=g_wheelSettings.force;
+    readFloat("ffb_gain",ff.gain); ff.gain=racing::clamp(ff.gain,0,1.5f);
+    readFloat("ffb_filter",ff.filter); ff.filter=racing::clamp(ff.filter,.05f,1);
+    readFloat("ffb_road",ff.road); ff.road=racing::clamp(ff.road,0,1);
+    readFloat("ffb_minimum",ff.minimum); ff.minimum=racing::clamp(ff.minimum,0,.25f);
+    readFloat("ffb_damping",ff.damping); ff.damping=racing::clamp(ff.damping,0,1);
+    readFloat("ffb_friction",ff.friction); ff.friction=racing::clamp(ff.friction,0,1);
+    readFloat("ffb_caster",ff.caster); ff.caster=racing::clamp(ff.caster,0,2);
+    readFloat("ffb_self_center",ff.selfCenter); ff.selfCenter=racing::clamp(ff.selfCenter,0,1);
+    readFloat("ffb_load",ff.load); ff.load=racing::clamp(ff.load,0,1);
+    readFloat("ffb_knee",ff.knee); ff.knee=racing::clamp(ff.knee,.3f,1);
+    readInt("ffb_hud",g_wheelSettings.ffbHud); readInt("ffb_log",g_wheelSettings.ffbLog);
     readFloat("handbrake_on",g_wheelSettings.handbrakeOn);readFloat("handbrake_off",g_wheelSettings.handbrakeOff);
     g_wheelSettings.handbrakeOn=racing::clamp(g_wheelSettings.handbrakeOn,.05f,1);
     g_wheelSettings.handbrakeOff=racing::clamp(g_wheelSettings.handbrakeOff,0,g_wheelSettings.handbrakeOn-.01f);
@@ -205,11 +293,13 @@ bool Wheel_SaveConfig(const char* path) {
             axisNames[i],a.deadzone,axisNames[i],a.gamma);
     }
     for(int i=0;i<6;++i) fprintf(f,"gear%d_button=%d\n",i+1,g_wheelSettings.gearButtons[i]);
-    fprintf(f,"handbrake_button=%d\nrotation=%g\nsteering_lock=%g\nffb_gain=%g\nffb_damping=%g\nffb_road=%g\nffb_filter=%g\nffb_invert=%d\n",
-        g_wheelSettings.handbrakeButton,g_wheelSettings.rotation,g_wheelSettings.steeringLock,g_wheelSettings.gain,
-        g_wheelSettings.damping,g_wheelSettings.road,g_wheelSettings.filter,g_wheelSettings.forceInvert);
+    const auto& ff=g_wheelSettings.force;
+    fprintf(f,"handbrake_button=%d\nrotation=%g\nsteering_lock=%g\nffb_invert=%d\n",
+        g_wheelSettings.handbrakeButton,g_wheelSettings.rotation,g_wheelSettings.steeringLock,g_wheelSettings.forceInvert);
+    fprintf(f,"ffb_gain=%g\nffb_filter=%g\nffb_road=%g\nffb_minimum=%g\nffb_damping=%g\nffb_friction=%g\nffb_caster=%g\nffb_self_center=%g\nffb_load=%g\nffb_knee=%g\nffb_hud=%d\nffb_log=%d\n",
+        ff.gain,ff.filter,ff.road,ff.minimum,ff.damping,ff.friction,ff.caster,ff.selfCenter,ff.load,ff.knee,g_wheelSettings.ffbHud,g_wheelSettings.ffbLog);
     fprintf(f,"hardware_rotation=%g\n",g_wheelSettings.hardwareRotation);
-    fprintf(f,"handbrake_on=%g\nhandbrake_off=%g\nffb_centering=%g\nffb_minimum=%g\n",g_wheelSettings.handbrakeOn,g_wheelSettings.handbrakeOff,g_wheelSettings.centering,g_wheelSettings.minimumForce);
+    fprintf(f,"handbrake_on=%g\nhandbrake_off=%g\n",g_wheelSettings.handbrakeOn,g_wheelSettings.handbrakeOff);
     const auto& t=g_wheelSettings.transmission;
     fprintf(f,"assisted_clutch=%d\ndriver_burnout=%d\nclutch_bite=%g\nfinal_drive=%g\ntyre_radius=%g\nidle_rpm=%g\nredline_rpm=%g\n",t.assisted,t.burnout,t.bite,t.finalDrive,t.tyreRadius,t.idle,t.redline);
     for(int i=0;i<6;++i) fprintf(f,"ratio%d=%g\n",i,t.ratios[i]);

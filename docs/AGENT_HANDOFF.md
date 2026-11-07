@@ -18,6 +18,7 @@ Le modèle demandé s'inspire des comportements d'un simulateur, mais le moteur 
 | `572a16b8` | Première implémentation volant, transmission, FFB, calibration et replays |
 | `a423d93e` — `wheel-controller` | Base des premiers essais : pédales corrigées sur le matériel, capture de diagnostic, démarrage depuis les images disque |
 | `25483e6b` — `wheel-controller-drive-feel` | Corrections burnout, frein à main, propulsion en rapports élevés, FFB et compagnon replay v2 |
+| `wheel-controller-ffb` (depuis `wheel-controller-drive-feel`) | Modèle FFB v2 : couple d'auto-alignement, effets damper/friction matériels, compression douce, rechargement à chaud de `wheel.ini`, HUD et télémétrie CSV. Non poussée, non testée sur le matériel |
 
 Ces deux branches ont été poussées vers `https://github.com/toukea/REDRIVER2.git` (remote local `fork`). `origin` pointe toujours vers `OpenDriver2/REDRIVER2`. La branche de corrections doit rester distincte de la base à la demande de l'utilisateur. Les commits documentaires suivants complètent cette chronologie.
 
@@ -88,11 +89,26 @@ Le frein à main conserve sa valeur brute dans les données de replay mais son e
 
 ### Retour de force
 
-Le signal combine les forces latérales des contacts avant, les variations de suspension et les surfaces. La révision passe la division du signal latéral de `16000` à `4000`, ajoute un rappel dépendant du braquage et de la vitesse **uniquement avec contact avant**, et conserve amortissement, filtrage et butées logicielles.
+**Modèle v2 (branche `wheel-controller-ffb`, 7 novembre 2026).** L'utilisateur a jugé le FFB de `drive-feel` « mal réglé » : prise en main difficile, sans précision supplémentaire. Diagnostic sur le code : la force latérale brute était utilisée comme couple (pas d'allègement à la limite), un ressort synthétique `-braquage × vitesse × ffb_centering` s'opposait au contre-braquage en glisse, l'amortissement était calculé à 30 Hz (retard, risque d'oscillation), la force minimale créait une marche au centre et l'écrêtage était dur.
 
-Paramètres initiaux de la révision : `ffb_gain=.60`, `ffb_filter=.55`, `ffb_road=.20`, `ffb_centering=.65`, `ffb_minimum=.08`. Le minimum compense la zone peu sensible du G29, avec un seuil évitant une force minimale appliquée au zéro exact. Vérifier ces valeurs sur le matériel ; ne pas les présenter comme une calibration définitive.
+Chaîne actuelle :
 
-SDL doit proposer `SDL_HAPTIC_CONSTANT`. Un effet court de 120 ms est mis à jour/relancé à chaque commande. Les forces sont arrêtées hors conduite, à la perte de focus, à la pause et en replay ; la disparition d'une mise à jour laisse expirer l'effet. Les erreurs d'envoi sont journalisées une fois. Le jeu demande le gain haptique matériel à 100 % lorsqu'il est pris en charge, puis applique son gain logiciel. Les chocs de carrosserie n'ont pas de signal spécifique.
+1. `wheelforces.c` transmet pour chaque roue `slidevel` (±12500 = limite de frottement du jeu), la charge avant `frontFS` rapportée à sa valeur en roue libre (`937 × frictionScaleRatio/32 × traction`, Q12), le blocage, la compression et la surface.
+2. `wheel.c` calcule par pneu avant `racing::alignTorque(slip, ffb_caster)` = `s(1 − s² + m)` normalisé à son pic (pic ≈ 0,65 pour m = 0,25 ; 47 % du pic à saturation). Somme des deux roues × 0,5, multipliée par le facteur de charge lissé (`1 + ffb_load × (charge − 1)`, borné 0,6–1,4), × 0,35 en marche arrière, plus un ressort géométrique `−ffb_self_center × braquage`. Roue bloquée : aucun couple de pneu.
+3. `wheel.cpp` / `racing::ForceShaper` : filtre passe-bas (`ffb_filter`), gain, `softClip` (tanh au-delà de `ffb_knee`), butée logicielle, `deadbandCompensate` (rampe continue sur 3 %), inversion, envoi constant 120 ms.
+4. Effets condition SDL `DAMPER` et `FRICTION` (durée infinie, coefficients mis à jour au-delà de 1 % d'écart), créés si `SDL_HapticQuery` les annonce. Sinon amortissement logiciel. Le frottement vaut `ffb_friction × (0,3 + 0,7 × max(0, 1 − v/8 m/s))`.
+
+Convention de signe inchangée : couple positif vers le braquage positif, `slidevel` négatif en virage à braquage positif, donc rappel. Les tests du pont vérifient : rappel en virage, direction conservée à saturation, allègement en sous-virage, couple vers le contre-braquage en survirage, alourdissement au freinage, roues bloquées légères, aucune force de pneu en l'air.
+
+`data/wheel.ini` est relu à chaud (horodatage + taille, contrôle chaque seconde dans `Wheel_Poll`). `ffb_hud=1` affiche `FFB`, `GRIP` (glissement avant max en %) et `CLIP`. `ffb_log=1` écrit `ffb_telemetry.csv` dans le dossier de travail (`data/`, ignoré par Git) : utile pour régler à partir de mesures plutôt que d'impressions.
+
+Valeurs par défaut v2 : `ffb_gain=.80`, `ffb_filter=.70`, `ffb_road=.25`, `ffb_minimum=.08`, `ffb_damping=.12`, `ffb_friction=.15`, `ffb_caster=.25`, `ffb_self_center=.08`, `ffb_load=.50`, `ffb_knee=.75`. Ce sont des points de départ issus des pratiques sim racing pour un G29 (force minimale 8–12 %, centrage G HUB désactivé), **pas une calibration validée**. L'ancienne clé `ffb_centering` est ignorée.
+
+**Non vérifié :** compilation MSVC du jeu complet (seuls les tests ont été compilés, avec g++ sous Linux : 46 modèle, 31 pont, 26 SDL virtuel ; le volant virtuel SDL n'a pas d'haptique, donc les effets condition n'ont jamais été exécutés), prise en charge réelle de `DAMPER`/`FRICTION` par G HUB, sens et intensité sur le volant, plage typique de `GRIP` en conduite (si le jeu travaille souvent près de 100 %, le volant sera souvent léger : augmenter `ffb_caster`).
+
+Historique `drive-feel` : division du signal latéral de `16000` à `4000`, ressort de rappel dépendant de la vitesse, `ffb_gain=.60`, `ffb_filter=.55`, `ffb_road=.20`, `ffb_centering=.65`, `ffb_minimum=.08`.
+
+SDL doit proposer `SDL_HAPTIC_CONSTANT`. Un effet court de 120 ms est mis à jour/relancé à chaque commande. Les forces sont arrêtées hors conduite, à la perte de focus, à la pause et en replay ; la disparition d'une mise à jour laisse expirer l'effet constant (les effets passifs sont arrêtés explicitement par `Wheel_Stop`). Les erreurs d'envoi sont journalisées une fois. Le jeu demande le gain haptique matériel à 100 % et désactive l'autocentrage. Les chocs de carrosserie n'ont pas de signal spécifique.
 
 ## Replays : contrat de données
 
@@ -137,7 +153,7 @@ Ne pas commiter les images, les archives, les fichiers de sauvegarde ou les logs
 
 1. Comparer la même voiture de Chicago sur la base puis sur la branche de corrections : départ en première, durée du burnout, transition vers accélération normale, accélération en 3/4/5 et vitesse de pointe sur un trajet comparable.
 2. Vérifier le frein à main USB près des seuils 30/20 %, le verrouillage arrière et le retour à l'adhérence, sans confondre avec le frein de service.
-3. Confirmer le sens du FFB et son intensité, le comportement en contre-braquage, à l'arrêt, en l'air, dans les menus, à la perte de focus et après déconnexion. Le rappeler avant chaque hausse d'intensité ; ne pas annoncer une validation sans retour physique.
+3. Sur `wheel-controller-ffb`, confirmer d'abord le sens du FFB, la présence de `+ damper + friction` dans le journal SDL, puis régler avec le HUD et la télémétrie. Confirmer son intensité, le comportement en contre-braquage, à l'arrêt, en l'air, dans les menus, à la perte de focus et après déconnexion. Le rappeler avant chaque hausse d'intensité ; ne pas annoncer une validation sans retour physique.
 4. Comparer une conduite enregistrée et sa lecture v2. Vérifier aussi les replays natifs, le clavier/manette et le personnage à pied.
 5. Vérifier les villes du disque 2 et leur chargement : la simple extraction du disque 2 ne prouve pas que la commutation est gérée.
 

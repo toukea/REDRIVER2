@@ -11,9 +11,10 @@ WheelSettings g_wheelSettings;
 racing::Input testInput;
 bool connected=true;
 int forceCount=0,stopCount=0;
+racing::ForceFrame lastFrame;
 bool Wheel_Read(racing::Input& value){value=testInput;return connected;}
 void Wheel_Stop(){++stopCount;}
-void Wheel_Force(float,float){++forceCount;}
+racing::ForceReport Wheel_Force(const racing::ForceFrame& frame){++forceCount;lastFrame=frame;return racing::ForceReport();}
 int GetPlayerId(CAR_DATA*){return 0;}
 int PrintString(char*,int,int){return 0;}
 void PsyX_Log_Error(const char*,...){}
@@ -59,6 +60,25 @@ int main(){
     testInput.handbrake=.15f;Wheel_GameApply(cp);require(cp->handbrake==0,"handbrake releases below lower threshold");
     testInput.handbrake=.25f;Wheel_GameApply(cp);require(cp->handbrake==0,"partial pull below threshold does not reengage");
     pauseflag=0;MainPlayer.playerType=PLAYER_TYPE_CAR;testInput.handbrake=0;testInput.steering=.5f;Wheel_GameApply(cp);
-    int sent=forceCount;Wheel_GameContact(cp,0,-2000,20,0);Wheel_GameFeedback();require(forceCount>sent,"front contact produces feedback command");
+    int sent=forceCount;Wheel_GameContact(cp,0,-2000,4096,0,20,0);Wheel_GameFeedback();require(forceCount>sent,"front contact produces feedback command");
+    // Positive steering in a corner: front lateral slip is negative, torque must pull back.
+    cp->hd.speed=60;cp->hd.wheel_speed=60*4096;
+    Wheel_GameContact(cp,0,-4000,4096,0,0,0);Wheel_GameContact(cp,2,-4000,4096,0,0,0);Wheel_GameFeedback();
+    float cornering=lastFrame.torque;require(cornering<0,"aligning torque restores the steering");
+    Wheel_GameContact(cp,0,-12500,4096,0,0,0);Wheel_GameContact(cp,2,-12500,4096,0,0,0);Wheel_GameFeedback();
+    require(lastFrame.torque<0,"saturated front keeps the restoring direction");
+    float midSlip=0;for(int i=0;i<20;++i){Wheel_GameContact(cp,0,-8000,4096,0,0,0);Wheel_GameContact(cp,2,-8000,4096,0,0,0);Wheel_GameFeedback();midSlip=lastFrame.torque;}
+    for(int i=0;i<20;++i){Wheel_GameContact(cp,0,-12500,4096,0,0,0);Wheel_GameContact(cp,2,-12500,4096,0,0,0);Wheel_GameFeedback();}
+    require(std::fabs(lastFrame.torque)<std::fabs(midSlip)*.75f,"understeer makes the steering go light");
+    testInput.steering=-.2f;Wheel_GameApply(cp);
+    for(int i=0;i<20;++i){Wheel_GameContact(cp,0,5000,4096,0,0,0);Wheel_GameContact(cp,2,5000,4096,0,0,0);Wheel_GameFeedback();}
+    require(lastFrame.torque>0,"oversteer slide pulls the wheel into countersteer");
+    float light=0,braking=0;
+    smoothedLoad=1;for(int i=0;i<30;++i){Wheel_GameContact(cp,0,-4000,4096,0,0,0);Wheel_GameContact(cp,2,-4000,4096,0,0,0);Wheel_GameFeedback();light=lastFrame.torque;}
+    for(int i=0;i<30;++i){Wheel_GameContact(cp,0,-4000,6349,0,0,0);Wheel_GameContact(cp,2,-4000,6349,0,0,0);Wheel_GameFeedback();braking=lastFrame.torque;}
+    require(braking<light,"braking weight transfer makes the steering heavier");
+    Wheel_GameContact(cp,0,-4000,4096,1,0,0);Wheel_GameContact(cp,2,-4000,4096,1,0,0);Wheel_GameFeedback();
+    require(std::fabs(lastFrame.torque)<.1f,"locked front wheels go light");
+    Wheel_GameFeedback();require(std::fabs(lastFrame.torque)<.0001f,"airborne front transmits no tyre torque");
     printf("PASS: %d game integration and replay checks\n",tests);
 }

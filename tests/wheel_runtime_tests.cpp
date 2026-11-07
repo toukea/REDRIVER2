@@ -58,6 +58,15 @@ int main(int argc,char** argv){
     require(Wheel_SaveConfig(path),"save calibration");
     g_wheelSettings=WheelSettings();Wheel_LoadConfig(path);
     require(g_wheelSettings.axes[0].center==123 && !g_wheelSettings.transmission.assisted,"calibration round trip");
+    g_wheelSettings.force.caster=.4f;g_wheelSettings.force.friction=.3f;g_wheelSettings.ffbLog=1;
+    require(Wheel_SaveConfig(path),"save force feedback settings");
+    g_wheelSettings=WheelSettings();Wheel_LoadConfig(path);
+    require(std::fabs(g_wheelSettings.force.caster-.4f)<.001f && std::fabs(g_wheelSettings.force.friction-.3f)<.001f && g_wheelSettings.ffbLog==1,"force feedback settings round trip");
+    Wheel_Init();SDL_Delay(1100); // Let the file timestamp change.
+    g_wheelSettings.force.gain=.5f;require(Wheel_SaveConfig(path),"edit configuration externally");
+    g_wheelSettings.force.gain=.8f;Wheel_Poll(false);
+    require(std::fabs(g_wheelSettings.force.gain-.5f)<.001f,"wheel.ini edits are reloaded while running");
+    g_wheelSettings.ffbLog=0;Wheel_Shutdown();
     g_wheelSettings.axes[0].center=0;
     Wheel_Init();
     require(SDL_JoystickSetVirtualAxis(joystick,0,16384)==0,"set analog steering");

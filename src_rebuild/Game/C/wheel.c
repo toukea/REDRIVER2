@@ -32,8 +32,16 @@ Frame state[MAX_CARS];
 racing::Transmission transmissions[MAX_CARS];
 std::vector<Frame> frames;
 bool overflow=false;
-float aligning=0, bumps=0;
-int frontContacts=0;
+struct FrontContacts {
+    float torque=0, slip=0, load=0, bumps=0;
+    int count=0;
+    bool rough=false;
+} front;
+float smoothedLoad=1;
+FILE* telemetry=nullptr;
+int telemetryLines=0;
+racing::ForceReport lastReport;
+float lastSlip=0;
 const size_t frameLimit=216000; // Two hours at the game's 30 Hz simulation rate.
 unsigned checksum(const void* data,int size) {
     const unsigned char* p=static_cast<const unsigned char*>(data);unsigned hash=2166136261u;
@@ -85,26 +93,56 @@ void Wheel_GameApply(CAR_DATA* cp){
     if(CameraCnt>=0 && size_t(CameraCnt)<frameLimit){if(frames.size()<=size_t(CameraCnt))frames.resize(CameraCnt+1);frames[CameraCnt]=f;}
     else overflow=true;
 }
-void Wheel_GameContact(CAR_DATA* cp,int wheel,int lateral,int bump,int surface){
+void Wheel_GameContact(CAR_DATA* cp,int wheel,int slide,int load,int locked,int bump,int surface){
     if(!Wheel_GameActive(cp) || NoPlayerControl || GetPlayerId(cp)!=0)return;
     if((wheel&1)==0){
-        // Approximate aligning moment from the actual front tyre lateral forces.
-        aligning+=racing::clamp(lateral/4000.f,-.5f,.5f);
-        ++frontContacts;
-        bumps+=racing::clamp(bump/120.f,-.25f,.25f);
-        if(surface&0x80)bumps+=((CameraCnt&1)?1:-1)*.08f;
+        // Front tyres only: their lateral force acting through the pneumatic and
+        // caster trails is what the driver feels in the steering column.
+        const float slip=racing::clamp(slide/12500.f,-1,1);
+        if(!locked)front.torque+=racing::alignTorque(slip,g_wheelSettings.force.caster);
+        front.slip=std::max(front.slip,locked?1.f:std::fabs(slip));
+        front.load+=load/4096.f;
+        ++front.count;
+        front.bumps+=racing::clamp(bump/120.f,-.25f,.25f);
+        if(surface&0x80)front.rough=true;
     }
 }
 void Wheel_GameFeedback(){
     if(!pauseflag && !NoPlayerControl && MainPlayer.playerType==PLAYER_TYPE_CAR && MainPlayer.playerCarId>=0 && MainPlayer.playerCarId<MAX_CARS && Wheel_GameActive(&car_data[MainPlayer.playerCarId])) {
         const CAR_DATA* car=&car_data[MainPlayer.playerCarId];
-        float load=frontContacts?1.f:0.f;
-        float speed=racing::clamp(car->hd.speed/60.f,.15f,1);
-        float steer=state[car->id].steer/(racing::clamp(g_wheelSettings.steeringLock,10,45)*4096/360);
-        Wheel_Force(aligning-steer*speed*load*racing::clamp(g_wheelSettings.centering,0,1.5f),bumps);
+        const racing::ForceSetup& setup=g_wheelSettings.force;
+        racing::ForceFrame frame;
+        frame.speed=car->hd.speed*.3f;
+        // Braking moves Driver's grip to the front tyres; acceleration takes it away.
+        // Follow that weight transfer smoothly instead of stepping with the pedal.
+        float load=front.count?front.load/front.count:1.f;
+        smoothedLoad+=(load-smoothedLoad)*.2f;
+        const float loadFactor=racing::clamp(1+setup.load*(smoothedLoad-1),.6f,1.4f);
+        // Two front tyres; a wheel in the air contributes nothing.
+        float tyres=front.torque*.5f*loadFactor;
+        // Reversing turns both trails around and becomes self-steering; keep it tame.
+        if(car->hd.wheel_speed<0)tyres*=.35f;
+        const float lockUnits=racing::clamp(g_wheelSettings.steeringLock,10,45)*4096/360;
+        const float steer=racing::clamp(state[car->id].steer/lockUnits,-1,1);
+        frame.torque=tyres-(front.count?steer*racing::clamp(setup.selfCenter,0,1):0.f);
+        float surfaceTexture=0;
+        if(front.rough)surfaceTexture=((CameraCnt&1)?1:-1)*.3f*racing::clamp(frame.speed/8,0,1);
+        frame.road=front.bumps+surfaceTexture;
+        lastReport=Wheel_Force(frame);
+        lastSlip=front.slip;
+        if(g_wheelSettings.ffbLog && telemetryLines<36000){
+            if(!telemetry){
+                telemetry=fopen("ffb_telemetry.csv","w");
+                if(telemetry)fprintf(telemetry,"frame,speed_ms,steer,front_slip,contacts,load,tyre_torque,torque,road,output,clipping\n");
+            }
+            if(telemetry){
+                fprintf(telemetry,"%d,%.2f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%d\n",CameraCnt,frame.speed,steer,front.slip,front.count,loadFactor,tyres,frame.torque,frame.road,lastReport.output,lastReport.clipping?1:0);
+                if(++telemetryLines%30==0)fflush(telemetry);
+            }
+        }
     }
-    else Wheel_Stop();
-    aligning=0;bumps=0;frontContacts=0;
+    else {Wheel_Stop();lastReport=racing::ForceReport();lastSlip=0;smoothedLoad=1;}
+    front=FrontContacts();
 }
 void Wheel_GameHUD(){
     int id=MainPlayer.playerCarId;if(id<0 || id>=MAX_CARS || !Wheel_GameActive(&car_data[id]))return;
@@ -112,6 +150,11 @@ void Wheel_GameHUD(){
     if(f.gear<0)strcpy(gear,"R");else if(!f.gear)strcpy(gear,"N");else snprintf(gear,sizeof(gear),"%d",f.gear);
     snprintf(label,sizeof(label),"%s  %d RPM%s",gear,int(f.rpm*6500/30000),(f.flags&4)?" STALLED":(f.flags&8)?" CLUTCH!":"");
     PrintString(label,16,SCREEN_H-28);
+    if(g_wheelSettings.ffbHud){
+        // Tuning aid: output level, front tyre slip (100 = grip limit), clipping.
+        snprintf(label,sizeof(label),"FFB %d  GRIP %d%s",int(std::fabs(lastReport.output)*100+.5f),int(lastSlip*100+.5f),lastReport.clipping?"  CLIP":"");
+        PrintString(label,16,SCREEN_H-40);
+    }
 }
 void Wheel_ReplayReset(){frames.clear();overflow=false;for(int i=0;i<MAX_CARS;++i)Wheel_GameReset(i);}
 bool Wheel_ReplayHasFrames(){return !frames.empty();}

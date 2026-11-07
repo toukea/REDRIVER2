@@ -497,7 +497,10 @@ void AddWheelForcesDriver1(CAR_DATA* cp, CAR_LOCALS* cl)
 				if (longitudinal < 0) braking = -braking;
 				force.vx -= bx * braking;
 				force.vz -= bz * braking;
-				Wheel_GameContact(cp, i, sidevel, newCompression - oldCompression, wheel->surface);
+				// Front grip relative to coasting: rises when braking, falls under power.
+				int nominal = FIXEDH((937 * handlingType[cp->hndType].frictionScaleRatio / 32) * cp->ap.carCos->traction);
+				int load = (i & 1) ? 4096 : frontFS * 4096 / MAX(1, nominal);
+				Wheel_GameContact(cp, i, slidevel, load, wheel->locked, newCompression - oldCompression, wheel->surface);
 			}
 #endif
 			force.vx += (susForce * surfaceNormal[0] - sidevel * lfx) - cl->vel[0] * 12;

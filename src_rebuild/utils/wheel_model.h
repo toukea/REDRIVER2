@@ -98,4 +98,79 @@ struct Transmission {
         return out;
     }
 };
+// ---------------------------------------------------------------------------
+// Force feedback. Normalized torque: +1 is the full device force towards
+// positive steering. Driver 2 runs at 30 Hz, so every value is per game frame.
+struct ForceSetup {
+    float gain = .80f;       // master strength, applied before soft clipping
+    float filter = .70f;     // smoothing of the tyre torque per frame (1 = none)
+    float road = .25f;       // suspension and surface detail
+    float minimum = .08f;    // low-force dead band compensation (gear-driven wheels)
+    float damping = .12f;    // device damper (software fallback if unsupported)
+    float friction = .15f;   // device friction at standstill (tyre scrub)
+    float caster = .25f;     // mechanical trail, relative to pneumatic trail at zero slip
+    float selfCenter = .08f; // caster jacking spring, independent of speed
+    float load = .50f;       // sensitivity to the game's front grip transfer
+    float knee = .75f;       // soft clipping starts above this level
+};
+struct ForceFrame {
+    float torque = 0;        // tyre and steering geometry torque
+    float road = 0;          // unfiltered detail
+    float speed = 0;         // m/s
+};
+struct ForceReport { float output = 0; bool clipping = false; };
+
+// Self-aligning torque of one front tyre. slip is Driver 2's lateral slip
+// normalised to its friction limit: the lateral force rises linearly with it
+// and saturates at |1|. The pneumatic trail shrinks as the contact patch starts
+// sliding from the rear while the mechanical (caster) trail remains, so the
+// torque peaks before the grip limit and goes light beyond it, like a real tyre.
+// The result is normalised so that 1 is the peak.
+inline float alignTorque(float slip, float caster) {
+    const float s = clamp(std::fabs(slip), 0, 1);
+    const float m = clamp(caster, 0, 2);
+    const float peakSlip = std::min(1.f, std::sqrt((1 + m) / 3));
+    const float peak = peakSlip * (1 - peakSlip * peakSlip + m);
+    const float t = s * (1 - s * s + m) / peak;
+    return slip < 0 ? -t : t;
+}
+// Linear up to the knee, then compressed smoothly towards 1 instead of cutting
+// every peak to the same flat value (hard clipping erases information).
+inline float softClip(float x, float knee) {
+    knee = clamp(knee, .3f, 1);
+    const float a = std::fabs(x);
+    if (a <= knee || knee >= 1) return clamp(x, -1, 1);
+    const float y = knee + (1 - knee) * std::tanh((a - knee) / (1 - knee));
+    return x < 0 ? -y : y;
+}
+// Lift small forces above the motor's dead band. The boost fades in over the
+// first 3 % so that there is no force step at zero, which makes the centre chatter.
+inline float deadbandCompensate(float x, float minimum) {
+    minimum = clamp(minimum, 0, .25f);
+    const float a = clamp(std::fabs(x), 0, 1);
+    const float y = (minimum + (1 - minimum) * a) * std::min(1.f, a / .03f);
+    return x < 0 ? -y : y;
+}
+struct ConditionLevels { float damper = 0, friction = 0; };
+// Passive effects run in the wheel firmware: stable at any update rate.
+// Friction models tyre scrub, strongest when parked and fading by about 30 km/h.
+inline ConditionLevels conditionLevels(float speedMS, const ForceSetup& f) {
+    const float low = clamp(1 - std::fabs(speedMS) / 8, 0, 1);
+    ConditionLevels c;
+    c.damper = clamp(f.damping, 0, 1);
+    c.friction = clamp(f.friction, 0, 1) * (.3f + .7f * low);
+    return c;
+}
+struct ForceShaper {
+    float filtered = 0;
+    void reset() { filtered = 0; }
+    ForceReport step(const ForceFrame& in, const ForceSetup& f) {
+        filtered += (in.torque - filtered) * clamp(f.filter, .05f, 1);
+        const float raw = clamp(f.gain, 0, 1.5f) * (filtered + in.road * clamp(f.road, 0, 1));
+        ForceReport r;
+        r.clipping = std::fabs(raw) > 1;
+        r.output = softClip(raw, f.knee);
+        return r;
+    }
+};
 }

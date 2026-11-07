@@ -54,5 +54,33 @@ int main(){
         check(box.out.drive>.99f,"high gear preserves stock propulsion in operating range");
     }
     input.throttle=0;box.step(input,60,1.f/30,cfg);check(box.out.engineBrake>0,"engine braking remains off throttle");
+    // Force feedback: tyre torque, soft clipping, dead band and passive effects.
+    {
+        float peakSlip=0,peak=0;
+        for(int i=0;i<=100;++i){float t=alignTorque(i/100.f,.25f);if(t>peak){peak=t;peakSlip=i/100.f;}}
+        check(std::fabs(peak-1)<.01f,"aligning torque normalised to its peak");
+        check(peakSlip>.5f && peakSlip<.8f,"aligning torque peaks before the grip limit");
+        check(alignTorque(1,.25f)<.6f && alignTorque(1,.25f)>.3f,"steering lightens but keeps caster feel when saturated");
+        check(alignTorque(.2f,.25f)>alignTorque(.1f,.25f) && alignTorque(.1f,.25f)>0,"torque builds progressively with slip");
+        check(alignTorque(-.3f,.25f)==-alignTorque(.3f,.25f),"aligning torque is symmetric");
+        check(alignTorque(1,.6f)>alignTorque(1,.1f),"more caster keeps more weight at the limit");
+        float previous=0;bool monotonic=true,continuous=true;
+        for(int i=1;i<=300;++i){float x=i/100.f,y=softClip(x,.75f);if(y<previous)monotonic=false;if(y-previous>.02f)continuous=false;previous=y;}
+        check(monotonic && continuous && previous<=1,"soft clip is smooth, monotonic and bounded");
+        check(softClip(.5f,.75f)==.5f,"soft clip is linear below the knee");
+        check(softClip(-2,.75f)<-.95f,"soft clip handles negative overload");
+        check(deadbandCompensate(0,.08f)==0,"no force at exact centre");
+        check(std::fabs(deadbandCompensate(.03f,.08f)-(.08f+.92f*.03f))<.0001f,"minimum force reached quickly");
+        check(deadbandCompensate(.001f,.08f)<.01f,"no step at centre");
+        check(std::fabs(deadbandCompensate(1,.08f)-1)<.0001f && deadbandCompensate(-.5f,.08f)<-.5f,"full range preserved");
+        ForceSetup f;
+        ConditionLevels parked=conditionLevels(0,f),fast=conditionLevels(30,f);
+        check(parked.friction>fast.friction*2 && fast.friction>0,"scrub friction fades with speed");
+        check(parked.damper==fast.damper && fast.damper>0,"damper stays active at speed");
+        ForceShaper shaper;ForceFrame frame;frame.torque=1;
+        ForceReport r;for(int i=0;i<30;++i)r=shaper.step(frame,f);
+        check(std::fabs(r.output-f.gain)<.01f && !r.clipping,"steady torque reaches gain without clipping");
+        f.gain=1.4f;r=shaper.step(frame,f);check(r.clipping && r.output<1,"overload reported and compressed");
+    }
     std::printf("PASS: %d wheel model checks\n",checks);
 }

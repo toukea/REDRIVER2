@@ -89,8 +89,8 @@ int Wheel_Configure(const char* configPath) {
             if(key==SDLK_i && selected<5) g_wheelSettings.axes[selected].inverted=!g_wheelSettings.axes[selected].inverted;
             if(key==SDLK_DELETE){if(selected<5)g_wheelSettings.axes[selected].index=-1;else if(selected<11)g_wheelSettings.gearButtons[selected-5]=-1;else g_wheelSettings.handbrakeButton=-1;}
             if(key==SDLK_a)g_wheelSettings.transmission.assisted=!g_wheelSettings.transmission.assisted;
-            if(key==SDLK_EQUALS)g_wheelSettings.gain=racing::clamp(g_wheelSettings.gain+.05f,0,1);
-            if(key==SDLK_MINUS)g_wheelSettings.gain=racing::clamp(g_wheelSettings.gain-.05f,0,1);
+            if(key==SDLK_EQUALS)g_wheelSettings.force.gain=racing::clamp(g_wheelSettings.force.gain+.05f,0,1);
+            if(key==SDLK_MINUS)g_wheelSettings.force.gain=racing::clamp(g_wheelSettings.force.gain-.05f,0,1);
             if(key==SDLK_LEFTBRACKET)g_wheelSettings.rotation=racing::clamp(g_wheelSettings.rotation-90,180,2520);
             if(key==SDLK_RIGHTBRACKET)g_wheelSettings.rotation=racing::clamp(g_wheelSettings.rotation+90,180,2520);
             if(key==SDLK_s && binding<0 && calibrating<0){g_wheelSettings.enabled=1;status=Wheel_SaveConfig(configPath)?"SAVED TO WHEEL.INI":"SAVE FAILED. CHECK FOLDER PERMISSIONS";}
@@ -116,7 +116,7 @@ int Wheel_Configure(const char* configPath) {
         SDL_SetRenderDrawColor(renderer,18,23,33,255);SDL_RenderClear(renderer);
         SDL_SetRenderDrawColor(renderer,220,230,240,255);
         text(renderer,24,20,"REDRIVER2 RACING WHEEL CALIBRATION");
-        char line[100];snprintf(line,sizeof(line),"DEVICES %d  ROTATION %.0F  FFB %.0F PERCENT  CLUTCH %s",int(joys.size()),g_wheelSettings.rotation,g_wheelSettings.gain*100,g_wheelSettings.transmission.assisted?"ASSISTED":"MANUAL");text(renderer,24,50,line);
+        char line[100];snprintf(line,sizeof(line),"DEVICES %d  ROTATION %.0F  FFB %.0F PERCENT  CLUTCH %s",int(joys.size()),g_wheelSettings.rotation,g_wheelSettings.force.gain*100,g_wheelSettings.transmission.assisted?"ASSISTED":"MANUAL");text(renderer,24,50,line);
         for(int row=0;row<12;++row){
             SDL_SetRenderDrawColor(renderer,row==selected?255:165,row==selected?210:180,110,255);text(renderer,24,95+row*34,labels[row]);
             int group=row==0?0:row<4?1:row==4||row==11?3:2;int d=devIndex(group);

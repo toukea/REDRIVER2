@@ -7,7 +7,7 @@ La base testée est conservée sur `wheel-controller` (`a423d93e`). Cette branch
 - Burnout : la première à plein accélérateur conserve l'effet Circle jusqu'au seuil natif (`452952` unités de vitesse), puis délivre l'accélération normale. Une baisse de vitesse ne réactive pas le burnout tant que l'accélérateur n'a pas été relâché. L'embrayage garde la priorité. Le mode de lancement Driver évite que le limiteur synthétique de première interrompe cette transition.
 - Frein à main : la course déclenche le verrouillage arrière Triangle à 30 %, maintenu jusqu'au retour sous 20 %. `handbrake_on` et `handbrake_off` sont configurables. La répartition d'adhérence et la coupure de propulsion suivent désormais le comportement original. Le frein de service reste analogique.
 - Transmission : suppression de la seconde réduction de propulsion, qui ne laissait que 27 % de la force originale en cinquième, avant même la courbe de couple. Les rapports élevés retrouvent la propulsion Driver dans leur plage utile ; le sous-régime, le limiteur, l'embrayage et le frein moteur subsistent. C'est un compromis avec le moteur arcade, pas une nouvelle simulation mécanique complète.
-- Retour de force : signal latéral multiplié par quatre avant limitation, rappel lié au braquage/vitesse uniquement avec contact avant, gain initial 60 %, compensation minimale 8 % et journalisation des erreurs d'envoi. `ffb_centering` et `ffb_minimum` sont réglables. Le sens et l'intensité nécessitent un nouvel essai matériel.
+- Retour de force : remplacé sur la branche `wheel-controller-ffb` par un modèle de couple d'auto-alignement (voir la section Retour de force). Le sens et l'intensité nécessitent un nouvel essai matériel.
 
 Les nouveaux replays portent la version 2 du compagnon `.wheel`. Les compagnons expérimentaux version 1 sont refusés car la physique a changé ; les replays natifs sans compagnon restent compatibles. Les sections ci-dessous décrivent aussi la version initiale et son processus d'installation.
 
@@ -60,13 +60,40 @@ Le volant, les pédales, le shifter et le frein à main peuvent appartenir à de
 - Le burnout Driver s'active en première, à plus de 97 % d'accélérateur, à faible vitesse et lorsque l'embrayage transmet du couple. Débrayé à fond, le moteur monte seul en régime. `driver_burnout=0` désactive cette assistance arcade.
 - Le HUD affiche le rapport engagé, le régime et le calage. Les quatre boutons de face, les premières commandes auxiliaires et la croix directionnelle disposent d'une correspondance de manette standard. Le clavier reste disponible pour les menus et le personnage à pied ; la conduite au volant vise le joueur 1.
 
-## Retour de force
+## Retour de force (modèle v2, branche `wheel-controller-ffb`)
 
-Le couple est estimé à partir des forces latérales des pneus avant. Amortissement, irrégularités de suspension et surfaces complètent cet effort ; une butée logicielle est ajoutée pour les plages réduites. Ce n'est pas une simple conversion des vibrations de manette. Les chocs de carrosserie n'ont pas encore de modèle haptique distinct.
+Le couple ressenti est calculé à partir des pneus avant du moteur physique de Driver 2, comme dans les simulateurs actuels, et non à partir d'un ressort de rappel synthétique.
 
-SDL doit exposer les effets de force constante pour ce périphérique. À défaut, les commandes restent utilisables sans retour de force et un message apparaît dans le journal. La compatibilité des autres volants doit être validée modèle par modèle ; des axes configurables ne garantissent pas à eux seuls le fonctionnement de leur retour de force.
+- **Couple d'auto-alignement.** La force latérale de chaque pneu avant (linéaire jusqu'à la limite d'adhérence du jeu, puis saturée) agit à travers une chasse pneumatique qui diminue avec le glissement et une chasse mécanique qui reste. Le volant s'alourdit avec la charge latérale, culmine avant la limite (environ 65 % du glissement maximal), puis **s'allège nettement en sous-virage**. En survirage, le couple tire naturellement le volant vers le contre-braquage : aucun ressort ne s'y oppose.
+- **Transfert de charge.** Le jeu donne plus d'adhérence à l'avant au freinage et moins sous accélération. La direction s'alourdit au freinage et s'allège à l'accélération, avec un lissage pour éviter les à-coups (`ffb_load`).
+- **Roues bloquées / en l'air / marche arrière.** Roues avant bloquées : direction légère. Roues en l'air : aucun couple de pneu. En marche arrière, le couple, physiquement déstabilisant, est réduit à 35 %.
+- **Effets passifs dans le firmware.** Amortisseur (`ffb_damping`) et frottement (`ffb_friction`) sont des effets SDL exécutés par le volant lui-même, stables quelle que soit la cadence du jeu (30 Hz). Le frottement simule le frottement des pneus à l'arrêt et s'estompe vers 30 km/h. Sans prise en charge du matériel, un amortissement logiciel prend le relais (journal : `Wheel FFB: constant force + damper + friction`).
+- **Compression douce.** Au-delà de `ffb_knee`, les pics sont compressés progressivement au lieu d'être écrêtés : les détails restent perceptibles même à fort gain.
+- **Zone morte du G29.** `ffb_minimum` relève les petites forces au-dessus de la zone insensible des moteurs à engrenages, avec une rampe continue sur les 3 premiers pour cent : pas de saut de force au centre, donc pas de cliquetis.
+- **Route.** Compression des suspensions avant et texture des surfaces meubles (herbe, sable), proportionnelle à la vitesse et absente à l'arrêt (`ffb_road`).
 
-Le gain initial de cette révision est de 60 %. Vérifier sur le G29 que l'effort ramène le volant vers la trajectoire ; si son sens est inversé, arrêter l'essai et changer `ffb_invert`. Les forces sont arrêtées dans les menus, à la pause, à la perte de focus, en replay et à la déconnexion. Chaque effet expire après 120 ms sans renouvellement. La déconnexion en conduite libère l'accélérateur et applique le frein.
+### Réglages
+
+| Clé | Défaut | Rôle | Si… |
+| --- | --- | --- | --- |
+| `ffb_gain` | 0.80 | Force globale (jusqu'à 1.5, compression douce au-delà de 1) | trop mou partout : augmenter ; trop dur partout : diminuer |
+| `ffb_caster` | 0.25 | Poids conservé à la limite d'adhérence | l'allègement en sous-virage est trop brutal : augmenter (0.4–0.6) ; pas assez perceptible : diminuer (0.1–0.15) |
+| `ffb_self_center` | 0.08 | Rappel géométrique indépendant de la vitesse | volant flottant à basse vitesse : augmenter légèrement |
+| `ffb_load` | 0.50 | Sensibilité au transfert de charge | alourdissement au freinage trop/peu marqué |
+| `ffb_damping` | 0.12 | Amortisseur | oscillations en ligne droite en lâchant le volant : augmenter ; direction « visqueuse » : diminuer |
+| `ffb_friction` | 0.15 | Frottement à l'arrêt | manœuvres trop lourdes/légères |
+| `ffb_filter` | 0.70 | Lissage du couple (1 = aucun) | grain ou à-coups : diminuer ; retard ressenti : augmenter |
+| `ffb_road` | 0.25 | Bosses et surfaces | trop/peu de vibrations |
+| `ffb_minimum` | 0.08 | Compensation de la zone morte | centre mort : 0.10–0.12 ; cliquetis au centre : 0.05 |
+| `ffb_knee` | 0.75 | Début de la compression | `CLIP` affiché souvent : baisser `ffb_gain` d'abord |
+| `ffb_hud` | 1 | Affiche `FFB <niveau> GRIP <glissement avant> CLIP` | 0 pour masquer |
+| `ffb_log` | 0 | Écrit `data/ffb_telemetry.csv` (20 min max) | 1 pour une session d'analyse |
+
+**Réglage à chaud :** `data/wheel.ini` est relu automatiquement moins d'une seconde après son enregistrement, pendant la conduite. On peut ajuster un paramètre, sauvegarder, et ressentir le changement sans relancer le jeu. L'ancienne clé `ffb_centering` est ignorée : un ressort vers le centre contredit le contre-braquage en glisse.
+
+**Logitech G HUB :** désactiver « Ressort de centrage dans les jeux avec retour de force », Sensibilité 50, Intensité au maximum, plage 900°. Le jeu règle aussi le gain matériel à 100 % et désactive l'autocentrage.
+
+Les forces sont arrêtées dans les menus, à la pause, à la perte de focus, en replay et à la déconnexion. La force constante expire après 120 ms sans renouvellement. Les chocs de carrosserie n'ont pas encore de signal propre. Comme toujours, le sens est à vérifier en premier : si le volant pousse vers l'extérieur du virage, arrêter et changer `ffb_invert`.
 
 ## Replays et compatibilité
 
