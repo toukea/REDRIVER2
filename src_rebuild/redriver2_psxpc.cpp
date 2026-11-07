@@ -25,6 +25,12 @@
 
 #include "utils/ini.h"
 #include "utils/wheel.h"
+#include <string>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <unistd.h>
+#endif
 
 #include <SDL_scancode.h>
 #include <SDL_gamecontroller.h>
@@ -476,6 +482,24 @@ void SwitchMappings(int menu)
 int main(int argc, char** argv)
 {
 	SDL_SetMainReady();
+	// Support opening the compiled executable directly, as well as the launcher.
+	FILE* workingConfig = fopen("config.ini", "rb");
+	if (workingConfig) fclose(workingConfig);
+	else if (char* base = SDL_GetBasePath())
+	{
+		std::string dataDir = std::string(base) + "../../../data";
+		SDL_free(base);
+		workingConfig = fopen((dataDir + "/config.ini").c_str(), "rb");
+		if (workingConfig)
+		{
+			fclose(workingConfig);
+#ifdef _WIN32
+			_chdir(dataDir.c_str());
+#else
+			chdir(dataDir.c_str());
+#endif
+		}
+	}
 	ini_t* config;
 
 #if USE_CRT_MALLOC
@@ -637,7 +661,22 @@ int main(int argc, char** argv)
 
 #endif
 
-	Wheel_LoadConfig("wheel.ini");
+	std::string wheelConfigPath = "wheel.ini";
+	FILE* wheelConfigFile = fopen(wheelConfigPath.c_str(), "rb");
+	if (wheelConfigFile) fclose(wheelConfigFile);
+	else
+	{
+		// Directly opening the calibrator must use the same profile as the launcher.
+		char* basePath = SDL_GetBasePath();
+		if (basePath)
+		{
+			std::string candidate = std::string(basePath) + "../../../data/wheel.ini";
+			SDL_free(basePath);
+			wheelConfigFile = fopen(candidate.c_str(), "rb");
+			if (wheelConfigFile) { fclose(wheelConfigFile); wheelConfigPath = candidate; }
+		}
+	}
+	Wheel_LoadConfig(wheelConfigPath.c_str());
 	for (int i = 0; i < argc; ++i)
 	{
 		const char* programName = strrchr(argv[i], '\\');
@@ -646,7 +685,7 @@ int main(int argc, char** argv)
 		{
 			if (config) ini_free(config);
 			if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_HAPTIC)) return 1;
-			int result = Wheel_Configure();
+			int result = Wheel_Configure(wheelConfigPath.c_str());
 			SDL_Quit();
 			return result;
 		}

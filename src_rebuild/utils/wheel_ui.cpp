@@ -27,7 +27,7 @@ void text(SDL_Renderer* r,int x,int y,const char* s) {
 }
 }
 
-int Wheel_Configure() {
+int Wheel_Configure(const char* configPath) {
     Wheel_Stop();
     SDL_Window* window=SDL_CreateWindow("REDRIVER2 Racing wheel configuration",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,1100,750,0);
     if(!window) return 1;
@@ -93,7 +93,7 @@ int Wheel_Configure() {
             if(key==SDLK_MINUS)g_wheelSettings.gain=racing::clamp(g_wheelSettings.gain-.05f,0,1);
             if(key==SDLK_LEFTBRACKET)g_wheelSettings.rotation=racing::clamp(g_wheelSettings.rotation-90,180,2520);
             if(key==SDLK_RIGHTBRACKET)g_wheelSettings.rotation=racing::clamp(g_wheelSettings.rotation+90,180,2520);
-            if(key==SDLK_s && binding<0 && calibrating<0){g_wheelSettings.enabled=1;status=Wheel_SaveConfig("wheel.ini")?"SAVED TO WHEEL.INI":"SAVE FAILED. CHECK FOLDER PERMISSIONS";}
+            if(key==SDLK_s && binding<0 && calibrating<0){g_wheelSettings.enabled=1;status=Wheel_SaveConfig(configPath)?"SAVED TO WHEEL.INI":"SAVE FAILED. CHECK FOLDER PERMISSIONS";}
         }
         SDL_JoystickUpdate();
         for(int d=0;d<int(joys.size());++d)if(joys[d]){

@@ -43,3 +43,5 @@ src_rebuild/obj/*
 src_rebuild/build*
 src_rebuild/*.make
 src_rebuild/Makefile
+data/install/disc1/
+data/install/disc2/

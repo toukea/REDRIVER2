@@ -10,7 +10,7 @@ Cette première implémentation vise Windows et le Logitech G29 avec pédalier e
 4. Affecter les six positions du shifter : 1 à 5 sont les rapports avant, **la position 6 est la marche arrière**. La position de marche arrière physique supplémentaire du shifter n'est pas utilisée par ce profil.
 5. Enregistrer avec **S**, fermer avec **Échap**, puis utiliser `start-wheel-game.cmd`.
 
-Les fichiers originaux de Driver 2 doivent être installés selon les instructions du projet. L'image `data/install/Driver2CD1.bin` attendue par `data/config.ini` n'est pas fournie. La compilation seule ne fournit pas le contenu du jeu.
+Les fichiers originaux de Driver 2 doivent être installés selon les instructions du projet. Pour les essais locaux, les deux images fournies ont été extraites dans `data/install/disc1` et `data/install/disc2`, et `data/config.ini` pointe vers l'image du disque 1. Le lancement et le chargement d'une voiture en mode Take A Ride ont été vérifiés. Ces images restent locales et sont exclues de Git ; la compilation seule ne fournit pas le contenu du jeu. Le passage aux villes nécessitant le disque 2 reste à vérifier.
 
 ## Configuration et calibration
 
@@ -34,6 +34,8 @@ Utiliser les lanceurs à la racine garantit que les réglages sont lus et enregi
 `hardware_rotation` doit correspondre à la plage réellement configurée dans le pilote. `rotation` détermine la plage utilisée en jeu, et `steering_lock` le braquage maximal des roues, en degrés par côté. À plage identique, la relation est linéaire entre les deux butées. Une plage de jeu plus courte ajoute une butée logicielle, dans la limite de l'intensité disponible. L'outil ne modifie pas le pilote du volant.
 
 Le fichier permet aussi de régler la zone morte (`*_deadzone`), la courbe (`*_gamma`), les minima/centres/maxima, le sens du retour de force (`ffb_invert`), son filtrage, les rapports de boîte et le point de patinage.
+
+Les essais séparés sur le G29 connecté avec Logitech G HUB ont identifié les axes suivants : accélérateur **1**, frein **2**, embrayage **3** (indexation à partir de zéro). Chaque pédale va de `32767` au repos à `-32768` enfoncée ; les trois axes de pédale sont donc inversés lors de la normalisation. Le profil fourni et les valeurs par défaut correspondent à ces mesures. Le volant utilise l'axe **0**. Sur un autre pilote, vérifier ces affectations par des mouvements séparés avant de les modifier.
 
 Le volant, les pédales, le shifter et le frein à main peuvent appartenir à des périphériques SDL distincts. Les affectations de l'outil mémorisent leur GUID. Un pédalier constitue un groupe de périphérique ; les trois pédales sont attendues sur ce même périphérique. Pour plusieurs appareils identiques présentant le même GUID, la sélection du premier appareil est une limite de cette version.
 

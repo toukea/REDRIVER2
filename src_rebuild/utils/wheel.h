@@ -6,7 +6,7 @@ struct WheelSettings {
     int enabled = 1;
     int device = -1, pedals = -1, shifter = -1, handbrakeDevice = -1;
     char guid[64] = {}, pedalsGuid[64] = {}, shifterGuid[64] = {}, handbrakeGuid[64] = {};
-    racing::Axis axes[5] = { racing::Axis(0), racing::Axis(2,true), racing::Axis(3,true), racing::Axis(1,true), racing::Axis(-1) };
+    racing::Axis axes[5] = { racing::Axis(0), racing::Axis(1,true), racing::Axis(2,true), racing::Axis(3,true), racing::Axis(-1) };
     int gearButtons[6] = {12,13,14,15,16,17};
     int handbrakeButton = 2;
     float rotation = 900, hardwareRotation = 900, steeringLock = 35;
@@ -25,5 +25,5 @@ void Wheel_Force(float aligning, float road);
 void Wheel_Stop();
 void Wheel_LoadConfig(const char* path);
 bool Wheel_SaveConfig(const char* path);
-int Wheel_Configure(); // Standalone SDL calibration UI; no game assets needed.
+int Wheel_Configure(const char* configPath = "wheel.ini"); // Standalone SDL calibration UI.
 #endif

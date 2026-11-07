@@ -4,10 +4,41 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 int tests=0;
 void require(bool value,const char* msg){++tests;if(!value){fprintf(stderr,"FAIL: %s (%s)\n",msg,SDL_GetError());exit(1);}}
 int main(int argc,char** argv){
     SDL_SetMainReady();
+    if(argc>1 && !strcmp(argv[1],"--monitor")){
+        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,"1");
+        if(SDL_Init(SDL_INIT_JOYSTICK))return 1;
+        struct Device {SDL_Joystick* joy;std::vector<int> lo,hi,last;std::vector<unsigned char> buttons;};
+        std::vector<Device> devices;
+        for(int i=0;i<SDL_NumJoysticks();++i){auto* joy=SDL_JoystickOpen(i);if(!joy)continue;
+            Device d;d.joy=joy;
+            for(int a=0;a<SDL_JoystickNumAxes(joy);++a){int raw=SDL_JoystickGetAxis(joy,a);d.lo.push_back(raw);d.hi.push_back(raw);d.last.push_back(raw);}
+            d.buttons.resize(SDL_JoystickNumButtons(joy));devices.push_back(d);
+            printf("DEVICE %d: %s\n",int(devices.size()-1),SDL_JoystickName(joy));
+        }
+        int seconds=argc>2?std::max(1,std::min(120,atoi(argv[2]))):45;
+        Uint32 start=SDL_GetTicks(),lastPrint=0;
+        printf("READ ONLY CAPTURE %d seconds. No force effects are opened or sent.\n",seconds);fflush(stdout);
+        while(SDL_GetTicks()-start<Uint32(seconds*1000)){
+            SDL_PumpEvents();SDL_JoystickUpdate();Uint32 now=SDL_GetTicks()-start;
+            for(size_t i=0;i<devices.size();++i){auto& d=devices[i];if(!SDL_JoystickGetAttached(d.joy))continue;
+                bool changed=now<50;
+                for(int a=0;a<int(d.last.size());++a){int raw=SDL_JoystickGetAxis(d.joy,a);d.lo[a]=std::min(d.lo[a],raw);d.hi[a]=std::max(d.hi[a],raw);if(std::abs(raw-d.last[a])>1024)changed=true;}
+                if(changed && (now-lastPrint>500 || now<50)){
+                    printf("%6.2fs D%d",now/1000.,int(i));for(int a=0;a<int(d.last.size());++a){d.last[a]=SDL_JoystickGetAxis(d.joy,a);printf(" A%d=%d",a,d.last[a]);}printf("\n");
+                }
+                for(int b=0;b<int(d.buttons.size());++b){auto down=SDL_JoystickGetButton(d.joy,b);if(down!=d.buttons[b]){printf("%6.2fs D%d B%d=%d\n",now/1000.,int(i),b,int(down));d.buttons[b]=down;}}
+            }
+            if(now-lastPrint>500)lastPrint=now;
+            fflush(stdout);SDL_Delay(20);
+        }
+        for(size_t i=0;i<devices.size();++i){auto& d=devices[i];for(int a=0;a<int(d.last.size());++a)printf("RANGE D%d A%d MIN=%d MAX=%d END=%d\n",int(i),a,d.lo[a],d.hi[a],SDL_JoystickGetAxis(d.joy,a));SDL_JoystickClose(d.joy);}
+        SDL_Quit();return 0;
+    }
     if(argc>1 && !strcmp(argv[1],"--devices")){
         if(SDL_Init(SDL_INIT_JOYSTICK|SDL_INIT_HAPTIC))return 1;
         printf("SDL devices: %d\n",SDL_NumJoysticks());
@@ -30,9 +61,9 @@ int main(int argc,char** argv){
     g_wheelSettings.axes[0].center=0;
     Wheel_Init();
     require(SDL_JoystickSetVirtualAxis(joystick,0,16384)==0,"set analog steering");
-    require(SDL_JoystickSetVirtualAxis(joystick,1,32767)==0,"release clutch");
-    require(SDL_JoystickSetVirtualAxis(joystick,2,0)==0,"half accelerator");
-    require(SDL_JoystickSetVirtualAxis(joystick,3,32767)==0,"release brake");
+    require(SDL_JoystickSetVirtualAxis(joystick,1,0)==0,"half accelerator");
+    require(SDL_JoystickSetVirtualAxis(joystick,2,32767)==0,"release brake");
+    require(SDL_JoystickSetVirtualAxis(joystick,3,32767)==0,"release clutch");
     require(SDL_JoystickSetVirtualButton(joystick,17,1)==0,"select sixth position");
     SDL_JoystickUpdate();Wheel_Poll(false);
     racing::Input input;
@@ -41,10 +72,14 @@ int main(int argc,char** argv){
     require(std::fabs(input.steering-.5f)<.001f,"16 bit steering reaches game unquantized");
     require(std::fabs(input.throttle-.5f)<.001f && input.brake==0,"independent progressive pedals");
     require(input.gear==-1,"sixth shifter position maps to reverse");
+    SDL_JoystickSetVirtualAxis(joystick,2,-32768);SDL_JoystickUpdate();Wheel_SampleDevices(input);
+    require(input.brake==1 && input.clutch==0 && std::fabs(input.throttle-.5f)<.001f,"brake does not change accelerator or clutch");
+    SDL_JoystickSetVirtualAxis(joystick,2,32767);SDL_JoystickUpdate();
     SDL_JoystickSetVirtualButton(joystick,17,0);SDL_JoystickSetVirtualButton(joystick,12,1);SDL_JoystickSetVirtualButton(joystick,13,1);SDL_JoystickUpdate();
     Wheel_SampleDevices(input);require(input.gear==0,"conflicting shifter buttons become neutral");
-    SDL_JoystickSetVirtualButton(joystick,13,0);SDL_JoystickSetVirtualAxis(joystick,1,-32768);SDL_JoystickUpdate();
+    SDL_JoystickSetVirtualButton(joystick,13,0);SDL_JoystickSetVirtualAxis(joystick,3,-32768);SDL_JoystickUpdate();
     Wheel_SampleDevices(input);require(input.gear==1 && input.clutch==1,"first gear and fully depressed clutch");
+    require(input.brake==0 && std::fabs(input.throttle-.5f)<.001f,"clutch does not change accelerator or brake");
     g_wheelSettings.rotation=450;Wheel_SampleDevices(input);require(input.steering>.99f,"reduced rotation maps to earlier lock");
     // No physical window or focus is acquired by this automated test.
     Wheel_Poll(true);require(!Wheel_Read(input),"no force or input without keyboard focus");
