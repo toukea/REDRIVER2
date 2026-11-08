@@ -1,5 +1,7 @@
 #include "../src_rebuild/utils/cockpit_model.h"
 #include "../src_rebuild/utils/cockpit_atlas.h"
+#include "../src_rebuild/utils/cockpit_import.h"
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 int checks=0;
@@ -48,5 +50,35 @@ int main(){
     check(uvN==4 && std::fabs(uvOut[0].uv.u-.5f)<.001f,"near-plane intersection interpolates texture coordinates");
     auto atlas=atlasPixels();check(atlas.size()==256*256*4,"complete original material atlas generated");
     check(atlas[3]==255 && atlas[0]==128,"solid atlas tile is opaque neutral gray for PSX color modulation");
+    {
+        // Imported interior: synthetic file, placement, eyes and steering rotation.
+        const char* path="src_rebuild/bin/tests/cockpit-test.rdc";
+        FILE* f=std::fopen(path,"wb");check(f!=nullptr,"create imported cockpit fixture");
+        std::fwrite("RD2C",1,4,f);unsigned v=1,n=2;std::fwrite(&v,4,1,f);std::fwrite(&n,4,1,f);
+        float meta[28]={-0.9f,0,-2.6f, 0.9f,1.4f,2.6f, 1.38f,0.45f, -0.34f,0.62f,-0.23f, -0.34f,0.86f,0.32f, 0,0.5f,-0.866f, 0.15f, -0.34f,1.3f,-0.3f};
+        std::fwrite(meta,sizeof(meta),1,f);unsigned char len=4;std::fwrite(&len,1,1,f);std::fwrite("test",1,4,f);
+        std::vector<unsigned char> rgb(256*256*3,200);std::fwrite(rgb.data(),1,rgb.size(),f);
+        for(unsigned char part=0;part<2;++part){float t[9]={-.3f,.5f,.2f,.3f,.5f,.2f,0,1,.2f};std::fwrite(t,sizeof(t),1,f);unsigned char e[10]={0,0,255,0,0,247,128,128,128,part};std::fwrite(e,1,10,f);}
+        std::fclose(f);
+        Imported in;check(loadImported(path,in) && in.tris.size()==2 && in.tris[1].part==1 && in.credit=="test","imported cockpit loads");
+        check(in.rgba.size()==256*256*4 && in.rgba[3]==255,"imported atlas expands to RGBA");
+        auto p=profile(FourSeat,100,90,260);p.roof=80;p.roofFront=40;
+        Placement pl=place(in,p,100,260,0);
+        check(pl.scale>50 && pl.scale<220,"interior scaled to the car footprint");
+        check(std::fabs(mapPoint(pl,{0,in.roofY,in.roofFront}).y-p.roof)<.01f,"roof anchored on the fitted roof");
+        Profile tall=p,small=p;applyImported(tall,in,pl,1.95f);applyImported(small,in,pl,1.60f);
+        check(tall.eye.y>small.eye.y,"taller driver sits with higher eyes");
+        check(tall.eye.y<=p.roof-.09f*pl.scale && small.eye.y>mapPoint(pl,in.seat).y,"eyes between seat and headliner");
+        check(std::fabs(small.tilt-30)<1 && small.wheel.z>small.eye.z,"steering column tilt and position from the model");
+        Vec c=small.wheel, rim=c+Vec(small.radius,0,0);
+        Vec r=rotateWheel(rim,c,small.tilt,90);
+        check(std::fabs(length(r-c)-small.radius)<.01f && length(r-rim)>small.radius,"wheel rotates about its column");
+        check(length(rotateWheel(rim,c,small.tilt,360)-rim)<.01f,"full turn returns the rim");
+        check(rotateWheel(c+Vec(0,small.radius*std::cos(small.tilt*pi/180),small.radius*std::sin(small.tilt*pi/180)),c,small.tilt,90).x>c.x+small.radius*.9f,"positive command turns the top of the wheel to the right");
+        std::remove(path);
+        Imported bad;FILE* g=std::fopen(path,"wb");std::fwrite("NOPE",1,4,g);std::fclose(g);
+        check(!loadImported(path,bad) && !bad.valid,"invalid interior rejected");std::remove(path);
+        Imported real;if(loadImported("data/cockpits/duke69.rdc",real))check(real.tris.size()>1500 && real.radius>.1f,"bundled Duke interior is valid");
+    }
     std::printf("PASS: %d cockpit geometry/pose/clipping checks\n",checks);
 }

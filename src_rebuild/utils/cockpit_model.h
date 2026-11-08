@@ -216,8 +216,9 @@ inline void gauge(Mesh& m, Vec center,float radius,float value,Material dial) {
     Vec tip=center+Vec(std::cos(a)*radius*.73f,std::sin(a)*radius*.73f,-1);
     m.tri(center+Vec(-.5f,0,-1),tip,center+Vec(.5f,0,-1),{235,125,59});
 }
-inline void controls(Mesh& m,const Profile& p,float degrees,float speed,float rpm,bool driver) {
+inline void controls(Mesh& m,const Profile& p,float degrees,float speed,float rpm,bool driver,bool wheelAndDials=true) {
     Color rubber={72,61,45}, metal={157,151,130}, shirt={96,113,130}, skin={193,148,108}, pants={58,67,78};
+    if(wheelAndDials){
     m.material=Leather;
     for(int i=0;i<32;++i) {
         float a=i*360.f/32,b=(i+1)*360.f/32;
@@ -239,6 +240,7 @@ inline void controls(Mesh& m,const Profile& p,float degrees,float speed,float rp
     gauge(m,{p.eye.x+12,p.eye.y-29,face},11,rpm/8000,RpmDial);
     gauge(m,{p.eye.x-30,p.eye.y-31,face},4,.65f,SmallDial);
     gauge(m,{p.eye.x+29,p.eye.y-31,face},4,.5f,SmallDial);
+    }
     if(!driver) return;
     // Head deliberately omitted. The seat/torso, not the camera, owns the body.
     Vec hip={p.eye.x,p.floor+30,p.eye.z-10};

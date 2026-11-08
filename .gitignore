@@ -47,3 +47,5 @@ data/install/disc1/
 data/install/disc2/
 data/ffb_telemetry.csv
 build-wheel.log
+data/cockpits/*_atlas.png
+__pycache__/

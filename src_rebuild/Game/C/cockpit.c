@@ -14,6 +14,9 @@
 #include "wheel.h"
 #include "../../utils/ini.h"
 #include "../../utils/cockpit_atlas.h"
+#include "../../utils/cockpit_import.h"
+#include <string>
+#include <map>
 #include "PsyX/PsyX_render.h"
 #include "texture.h"
 #include <cstdlib>
@@ -25,6 +28,12 @@ cockpit::Mesh fixedMesh, movingMesh;
 cockpit::Profile cached={};
 bool cachedValid=false;
 TextureID atlas=0;
+// Imported interiors, loaded once per file name from data/cockpits.
+struct ImportedCache { cockpit::Imported data; TextureID texture=0; bool tried=false; };
+std::map<std::string,ImportedCache> imported;
+struct GpuTri { cockpit::Vec a,b,c; unsigned char uv[6]; cockpit::Color color; bool luminous; };
+std::vector<GpuTri> fixedImported, frameTris;
+std::string fixedName; cockpit::Placement fixedPlacement; bool fixedValid=false;
 bool usedBuckets[OTSIZE];int bucketCount=0;
 struct FitCache { MODEL* model=nullptr;int id=-2,level=-1;cockpit::Profile p={}; } fitCache[MAX_CAR_RESIDENT_MODELS];
 float number(const char* section,const char* key,float fallback,float lo,float hi) {
@@ -45,17 +54,17 @@ cockpit::Vec transform(cockpit::Vec v,const MATRIX& m) {
             (m.m[1][0]*v.x+m.m[1][1]*v.y+m.m[1][2]*v.z)/4096.f,
             (m.m[2][0]*v.x+m.m[2][1]*v.y+m.m[2][2]*v.z)/4096.f};
 }
-void drawMesh(const cockpit::Mesh& mesh,const MATRIX& rotation,cockpit::Vec translation) {
+void drawTris(const std::vector<GpuTri>& tris,const MATRIX& rotation,cockpit::Vec translation) {
     MATRIX identity;InitMatrix(identity);VECTOR zero={0};
     // Sub-unit precision for close surfaces while preserving real PGXP depth.
     identity.m[0][0]=identity.m[1][1]=identity.m[2][2]=512;
     gte_SetRotMatrix(&identity);gte_SetTransVector(&zero);
-    for(const auto& tri:mesh.triangles) {
-        cockpit::ClipVertex source[3]={{transform(tri.a*-1,rotation)+translation,tri.uv[0]},{transform(tri.b*-1,rotation)+translation,tri.uv[1]},{transform(tri.c*-1,rotation)+translation,tri.uv[2]}};
+    float daylight=gTimeOfDay==TIME_NIGHT?.48f:gTimeOfDay==TIME_DUSK?.78f:1.f;
+    for(const auto& tri:tris) {
+        cockpit::UV uvs[3]={{float(tri.uv[0]),float(tri.uv[1])},{float(tri.uv[2]),float(tri.uv[3])},{float(tri.uv[4]),float(tri.uv[5])}};
+        cockpit::ClipVertex source[3]={{transform(tri.a*-1,rotation)+translation,uvs[0]},{transform(tri.b*-1,rotation)+translation,uvs[1]},{transform(tri.c*-1,rotation)+translation,uvs[2]}};
         cockpit::ClipVertex clipped[5];int count=cockpit::clipNearUV(source,3,clipped,32);
-        float daylight=gTimeOfDay==TIME_NIGHT?.48f:gTimeOfDay==TIME_DUSK?.78f:1.f;
-        bool luminous=tri.material==cockpit::SpeedDial||tri.material==cockpit::RpmDial||tri.material==cockpit::SmallDial||tri.material==cockpit::Radio;
-        float shade=luminous?.95f:daylight*(.72f+.28f*std::fabs(cockpit::dot(cockpit::unit(cockpit::cross(tri.b-tri.a,tri.c-tri.a)),cockpit::unit({-.3f,1,.2f}))));
+        float shade=tri.luminous?.95f:daylight*(.72f+.28f*std::fabs(cockpit::dot(cockpit::unit(cockpit::cross(tri.b-tri.a,tri.c-tri.a)),cockpit::unit({-.3f,1,.2f}))));
         for(int j=1;j<count-1;++j) {
             if(current->primptr+sizeof(POLY_FT3)+(bucketCount+2)*sizeof(DR_PSYX_TEX)>current->primtab+PRIMTAB_SIZE-4096)return;
             cockpit::ClipVertex v[3]={clipped[0],clipped[j],clipped[j+1]};
@@ -70,14 +79,29 @@ void drawMesh(const cockpit::Mesh& mesh,const MATRIX& rotation,cockpit::Vec tran
             }
             POLY_FT3* poly=(POLY_FT3*)current->primptr;
             gte_ldv3(&a,&b,&c);gte_rtpt();
-            setPolyFT3(poly);setRGB0(poly,int(tri.color.r*shade),int(tri.color.g*shade),int(tri.color.b*shade));
+            setPolyFT3(poly);setRGB0(poly,MIN(255,int(tri.color.r*shade)),MIN(255,int(tri.color.g*shade)),MIN(255,int(tri.color.b*shade)));
             gte_stsxy3(&poly->x0,&poly->x1,&poly->x2);
-            int tile=int(tri.material);
-            setUV3(poly,int(tile%4*64+1+v[0].uv.u*61),int(tile/4*64+1+v[0].uv.v*61),int(tile%4*64+1+v[1].uv.u*61),int(tile/4*64+1+v[1].uv.v*61),int(tile%4*64+1+v[2].uv.u*61),int(tile/4*64+1+v[2].uv.v*61));
+            setUV3(poly,int(v[0].uv.u),int(v[0].uv.v),int(v[1].uv.u),int(v[1].uv.v),int(v[2].uv.u),int(v[2].uv.v));
             poly->tpage=0;poly->clut=0;
             addPrim(current->ot+bucket,poly);
             current->primptr+=sizeof(POLY_FT3);
         }
+    }
+}
+bool luminous(cockpit::Material m){return m==cockpit::SpeedDial||m==cockpit::RpmDial||m==cockpit::SmallDial||m==cockpit::Radio;}
+// Procedural atlas: 4x4 tiles of 64 pixels.
+void appendProcedural(std::vector<GpuTri>& out,const cockpit::Mesh& mesh) {
+    for(const auto& t:mesh.triangles){
+        GpuTri g{t.a,t.b,t.c,{},t.color,luminous(t.material)};int tile=int(t.material);
+        for(int k=0;k<3;++k){g.uv[k*2]=(unsigned char)(tile%4*64+1+t.uv[k].u*61);g.uv[k*2+1]=(unsigned char)(tile/4*64+1+t.uv[k].v*61);}
+        out.push_back(g);
+    }
+}
+// With an imported atlas, procedural parts (driver arms) use its white strip.
+void appendFlat(std::vector<GpuTri>& out,const cockpit::Mesh& mesh) {
+    for(const auto& t:mesh.triangles){
+        GpuTri g{t.a,t.b,t.c,{128,252,129,252,128,253},{(unsigned char)(t.color.r/2),(unsigned char)(t.color.g/2),(unsigned char)(t.color.b/2)},false};
+        out.push_back(g);
     }
 }
 }
@@ -86,6 +110,22 @@ void Cockpit_LoadConfig() {
     config=ini_load("cockpit.ini");cachedValid=false;
     enabled=number("cockpit","enabled",1,0,1)!=0;
     showDriver=number("cockpit","driver",1,0,1)!=0;
+}
+ImportedCache* importedFor(const CAR_DATA* car,int family) {
+    char section[64];snprintf(section,sizeof(section),"%s.%d",LevelNames[GameLevel],modelId(car));
+    const char* keys[]={"interior_twoseat","interior_fourseat","interior_truck"};
+    const char* name=config?ini_get(config,section,"interior"):nullptr;
+    if(!name && config)name=ini_get(config,"cockpit",keys[MAX(0,MIN(2,family))]);
+    if(!name || !*name || !strcmp(name,"none"))return nullptr;
+    auto& entry=imported[name];
+    if(!entry.tried){
+        entry.tried=true;
+        std::string path=std::string("cockpits/")+name+".rdc";
+        if(cockpit::loadImported(path.c_str(),entry.data))
+            printInfo("Cockpit interior %s: %d triangles. %s\n",name,int(entry.data.tris.size()),entry.data.credit.c_str());
+        else printError("Cockpit interior %s could not be loaded from %s\n",name,path.c_str());
+    }
+    return entry.data.valid?&entry:nullptr;
 }
 bool Cockpit_Enabled(){return enabled;}
 bool Cockpit_StartInside(){return enabled && number("cockpit","start_in_cockpit",0,0,1)!=0;}
@@ -108,6 +148,11 @@ cockpit::Profile Cockpit_Profile(const CAR_DATA* car) {
             fit.model=model;fit.id=modelId(car);fit.level=GameLevel;
         }
         if(model)p=fit.p;
+    }
+    if(auto* in=importedFor(car,family)){
+        auto pl=cockpit::place(in->data,p,float(box.vx),float(box.vz),number(section,"interior_scale",0,0,400));
+        pl.offset=pl.offset+cockpit::Vec(number(section,"interior_x",0,-100,100),number(section,"interior_y",0,-100,100),number(section,"interior_z",0,-150,150));
+        cockpit::applyImported(p,in->data,pl,number(section,"driver_height",number("cockpit","driver_height",1.80f,1.4f,2.1f),1.4f,2.1f));
     }
     p.eye.x=number(section,"eye_x",p.eye.x,-p.width+12,p.width-12);
     p.eye.y=number(section,"eye_y",p.eye.y,p.floor+50,p.roof-8);
@@ -133,21 +178,51 @@ void Cockpit_Draw(int view) {
         cockpit::cabin(fixedMesh,p);cached=p;cachedValid=true;
         printInfo("Cockpit %s.%d: mesh=%d roof=%.1f eyes=(%.1f %.1f %.1f)\n",LevelNames[GameLevel],modelId(car),int(p.meshFitted),p.roof,p.eye.x,p.eye.y,p.eye.z);
     }
-    movingMesh.triangles.clear();
     float angle=Wheel_GameSteeringDegrees(car);
     float rpm=Wheel_GameActive(car)?Wheel_GameRPM(car)*6500.f/30000:car->hd.revs*6500.f/30000;
-    cockpit::controls(movingMesh,p,angle,std::fabs(car->hd.wheel_speed/4096.f*.3f)*3.6f,rpm,showDriver);
     MATRIX rotation;MulMatrix0(&inv_camera_matrix,&car->hd.drawCarMat,&rotation);
     // Match DrawCarObject's center of geometry, including the cosmetics offset.
     const auto& cog=car->ap.carCos->cog;
     cockpit::Vec origin=transform({float(cog.vx),float(cog.vy),float(cog.vz)},car->hd.drawCarMat);
     origin=origin+cockpit::Vec(float(car->hd.where.t[0]-camera_position.vx),float(-car->hd.where.t[1]-camera_position.vy),float(car->hd.where.t[2]-camera_position.vz));
     auto translation=transform(origin,inv_camera_matrix);
-    if(!atlas){auto pixels=cockpit::atlasPixels();atlas=GR_CreateRGBATexture(256,256,pixels.data());}
     memset(usedBuckets,0,sizeof(usedBuckets));bucketCount=0;
-    drawMesh(fixedMesh,rotation,translation);drawMesh(movingMesh,rotation,translation);
+    frameTris.clear();movingMesh.triangles.clear();
+    TextureID texture=0;
+    ImportedCache* in=importedFor(car,p.family);
+    if(in){
+        if(!in->texture)in->texture=GR_CreateRGBATexture(256,256,in->data.rgba.data());
+        texture=in->texture;
+        const auto& box=car->ap.carCos->colBox;
+        char section[64];snprintf(section,sizeof(section),"%s.%d",LevelNames[GameLevel],modelId(car));
+        // Same placement as Cockpit_Profile: it only depends on roof anchors.
+        auto pl=cockpit::place(in->data,p,float(box.vx),float(box.vz),number(section,"interior_scale",0,0,400));
+        pl.offset=pl.offset+cockpit::Vec(number(section,"interior_x",0,-100,100),number(section,"interior_y",0,-100,100),number(section,"interior_z",0,-150,150));
+        std::string key=std::string(section);
+        if(!fixedValid || fixedName!=key || fixedPlacement.scale!=pl.scale || fixedPlacement.offset.x!=pl.offset.x || fixedPlacement.offset.y!=pl.offset.y || fixedPlacement.offset.z!=pl.offset.z){
+            fixedImported.clear();
+            for(const auto& t:in->data.tris)if(t.part==0)
+                fixedImported.push_back({cockpit::mapPoint(pl,t.p[0]),cockpit::mapPoint(pl,t.p[1]),cockpit::mapPoint(pl,t.p[2]),{t.uv[0],t.uv[1],t.uv[2],t.uv[3],t.uv[4],t.uv[5]},t.color,false});
+            fixedName=key;fixedPlacement=pl;fixedValid=true;
+            printInfo("Cockpit %s uses %s: scale %.1f units/m, eyes=(%.1f %.1f %.1f)\n",section,in->data.credit.c_str(),pl.scale,p.eye.x,p.eye.y,p.eye.z);
+        }
+        cockpit::Vec centre=cockpit::mapPoint(pl,in->data.wheel);
+        for(const auto& t:in->data.tris)if(t.part==1){
+            GpuTri g{cockpit::rotateWheel(cockpit::mapPoint(pl,t.p[0]),centre,p.tilt,angle),cockpit::rotateWheel(cockpit::mapPoint(pl,t.p[1]),centre,p.tilt,angle),cockpit::rotateWheel(cockpit::mapPoint(pl,t.p[2]),centre,p.tilt,angle),{t.uv[0],t.uv[1],t.uv[2],t.uv[3],t.uv[4],t.uv[5]},t.color,false};
+            frameTris.push_back(g);
+        }
+        cockpit::controls(movingMesh,p,angle,0,rpm,showDriver,false);
+        appendFlat(frameTris,movingMesh);
+        drawTris(fixedImported,rotation,translation);drawTris(frameTris,rotation,translation);
+    } else {
+        cockpit::controls(movingMesh,p,angle,std::fabs(car->hd.wheel_speed/4096.f*.3f)*3.6f,rpm,showDriver);
+        if(!atlas){auto pixels=cockpit::atlasPixels();atlas=GR_CreateRGBATexture(256,256,pixels.data());}
+        texture=atlas;
+        std::vector<GpuTri> fixed;appendProcedural(fixed,fixedMesh);appendProcedural(frameTris,movingMesh);
+        drawTris(fixed,rotation,translation);drawTris(frameTris,rotation,translation);
+    }
     for(int bucket=0;bucket<OTSIZE;++bucket)if(usedBuckets[bucket]){
-        auto bind=(DR_PSYX_TEX*)current->primptr;SetPsyXTexture(bind,atlas,255,255);addPrim(current->ot+bucket,bind);current->primptr+=sizeof(DR_PSYX_TEX);
+        auto bind=(DR_PSYX_TEX*)current->primptr;SetPsyXTexture(bind,texture,255,255);addPrim(current->ot+bucket,bind);current->primptr+=sizeof(DR_PSYX_TEX);
     }
     Set_Inv_CameraMatrix();SetCameraVector();
 }

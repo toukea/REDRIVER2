@@ -2,6 +2,36 @@
 
 Travail du 8 novembre 2026 sur `wheel-controller-cockpit`, créée depuis `wheel-controller-ffb`. Cette branche conserve le support G29/FFB existant ; elle ne fusionne pas les branches d'essais précédentes. OpenXR n'est pas implémenté ici.
 
+## Habitacles importés (style Driver 2) — 8 novembre 2026
+
+Le cockpit généré par code reste le repli. Par défaut, chaque famille utilise maintenant un vrai habitacle d'époque, converti au rendu PlayStation de Driver 2 : un atlas 256×256, des UV 8 bits, des couleurs 15 bits tramées et un éclairage par face, entre 2 800 et 4 300 triangles volant compris.
+
+| Famille | Fichier | Source (Daniel Zhabotinsky, CC-BY-4.0) | Garniture |
+| --- | --- | --- | --- |
+| Deux places | `duke69.rdc` | Duke '69 | fauve |
+| Quatre places | `canyon75.rdc` | Canyon '75 Custom | bleu |
+| Camion / utilitaire | `bokaroo67.rdc` | Bokaroo '67 | fauve |
+| Pick-up Vegas 12 | `elalamo78.rdc` | El Alamo '78 | bordeaux |
+
+Voir `data/cockpits/CREDITS.md`. Ces voitures fictives des années 60–80 correspondent à la direction artistique du jeu, avec des marques inventées et peu de polygones. Les modèles modernes (Porsche 911, mod AC Suzuki Swift) ont été examinés et écartés pour cette raison. Le mod Assetto Corsa reste lisible par l'outil KN5 de la session, mais il n'est ni converti ni publié.
+
+**Ce qui est rendu.** Le maillage intérieur, le volant séparé qui tourne autour de sa colonne avec la commande, et l'intérieur de la coque : pavillon, montants, portières et plancher. Le plancher vient du soubassement réel du modèle : il n'y a plus de trou vers la route. Les faces jamais visibles depuis le siège sont retirées à la conversion. Les bras et le corps du conducteur procéduraux restent affichés, en aplat, mains posées sur la jante importée.
+
+**Placement.** Le modèle est mis à l'échelle sur la largeur et la longueur de collision de la voiture. Son pavillon et son bandeau de pare-brise sont calés sur le toit ajusté du modèle Driver (`fit_model`). Les clés `interior_scale`, `interior_x/y/z` corrigent un véhicule précis.
+
+**Hauteur du regard.** Les yeux sont placés au-dessus de l'assise du siège du modèle, à 0,355 × la taille du conducteur (`driver_height`, 1,80 m pour Tanner, soit 0,64 m), sans dépasser 10 cm sous le pavillon, et à l'aplomb du volant. Un conducteur plus grand s'assoit donc plus haut, quelle que soit la voiture. `pitch=8` incline le regard vers la route par défaut.
+
+| Clé | Rôle |
+| --- | --- |
+| `[cockpit] interior_twoseat/fourseat/truck` | Habitacle par famille (`none` = cockpit généré) |
+| `[VILLE.n] interior=` | Habitacle pour un modèle |
+| `driver_height` | Taille du conducteur en mètres, globale ou par modèle |
+| `interior_scale`, `interior_x/y/z` | Échelle (unités/m) et décalage manuels |
+
+**Ajouter un habitacle.** `python tools/cockpit/convert_cockpit.py modele.glb data/cockpits/nom.rdc --trim tan|red|blue|green|white|black --credit "…"`, puis `python tools/cockpit/preview_cockpit.py data/cockpits/nom.rdc apercu.png 0 -8` pour l'aperçu hors jeu. Les maillages sont reconnus par leur nom (`--interior`, `--wheel`, `--shell`). Utiliser `--shell Bottom` lorsque l'intérieur contient déjà pavillon et montants, comme pour le Bokaroo. `tools/cockpit/build_cockpits.sh` reconstruit les quatre fichiers fournis. Ne publier que des modèles sous licence libre, avec leurs crédits.
+
+**Validation.** 407 contrôles cockpit, dont format, placement, taille du conducteur et rotation du volant. Le jeu Windows compile. Observé en jeu : mission 1 de Chicago, berline avec l'intérieur Canyon, monde visible par les vitres, mains sur le volant. Le premier essai montrait le regard trop haut, d'où `pitch` passé de 3 à 8 : **non revérifié après ce changement**. Les autres familles, la nuit, le replay et les aiguilles n'ont pas encore été vérifiés en jeu. Les compteurs importés sont des textures fixes : les aiguilles ne bougent pas encore.
+
 ## Utilisation
 
 Compiler avec `./build-wheel.ps1`, puis utiliser `start-wheel-game.cmd`. En conduite, la commande de changement de caméra (touche **C** dans `data/config.ini`) parcourt poursuite → première personne dégagée → cockpit → caméra historique fixe/suivi → poursuite. Les commandes de regard existantes restent disponibles : A/D sur le profil clavier pour regarder latéralement. Le cockpit n'est proposé qu'en véhicule. En quittant la voiture, la vue piéton reste celle du jeu ; la préférence voiture est reprise à la prochaine entrée.
