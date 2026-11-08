@@ -98,9 +98,9 @@ void appendProcedural(std::vector<GpuTri>& out,const cockpit::Mesh& mesh) {
     }
 }
 // With an imported atlas, procedural parts (driver arms) use its white strip.
-void appendFlat(std::vector<GpuTri>& out,const cockpit::Mesh& mesh) {
+void appendFlat(std::vector<GpuTri>& out,const cockpit::Mesh& mesh,bool lit=false) {
     for(const auto& t:mesh.triangles){
-        GpuTri g{t.a,t.b,t.c,{128,252,129,252,128,253},{(unsigned char)(t.color.r/2),(unsigned char)(t.color.g/2),(unsigned char)(t.color.b/2)},false};
+        GpuTri g{t.a,t.b,t.c,{128,252,129,252,128,253},{(unsigned char)(t.color.r/2),(unsigned char)(t.color.g/2),(unsigned char)(t.color.b/2)},lit};
         out.push_back(g);
     }
 }
@@ -149,7 +149,9 @@ cockpit::Profile Cockpit_Profile(const CAR_DATA* car) {
         }
         if(model)p=fit.p;
     }
+    bool importedWheel=false;
     if(auto* in=importedFor(car,family)){
+        importedWheel=true;
         auto pl=cockpit::place(in->data,p,float(box.vx),float(box.vz),number(section,"interior_scale",0,0,400));
         pl.offset=pl.offset+cockpit::Vec(number(section,"interior_x",0,-100,100),number(section,"interior_y",0,-100,100),number(section,"interior_z",0,-150,150));
         cockpit::applyImported(p,in->data,pl,number(section,"driver_height",number("cockpit","driver_height",1.80f,1.4f,2.1f),1.4f,2.1f));
@@ -157,11 +159,12 @@ cockpit::Profile Cockpit_Profile(const CAR_DATA* car) {
     p.eye.x=number(section,"eye_x",p.eye.x,-p.width+12,p.width-12);
     p.eye.y=number(section,"eye_y",p.eye.y,p.floor+50,p.roof-8);
     p.eye.z=number(section,"eye_z",p.eye.z,p.rear+40,p.front-55);
-    p.wheel=p.eye+cockpit::Vec(0,-38,p.family==cockpit::Truck?66.f:96.f);
+    // An imported cabin owns its steering wheel; the hands must grip that rim.
+    if(!importedWheel)p.wheel=p.eye+cockpit::Vec(0,-38,p.family==cockpit::Truck?66.f:96.f);
     p.wheel.x=number(section,"wheel_x",p.wheel.x,-p.width+25,p.width-25);
     p.wheel.y=number(section,"wheel_y",p.wheel.y,p.floor+35,p.eye.y-15);
     p.wheel.z=number(section,"wheel_z",p.wheel.z,p.eye.z+35,p.eye.z+115);
-    p.radius=number(section,"wheel_radius",p.radius,16,32);
+    p.radius=number(section,"wheel_radius",p.radius,importedWheel?8.f:16.f,importedWheel?50.f:32.f);
     p.tilt=number(section,"wheel_tilt",p.tilt,0,65);
     return p;
 }
@@ -213,6 +216,9 @@ void Cockpit_Draw(int view) {
         }
         cockpit::controls(movingMesh,p,angle,0,rpm,showDriver,false);
         appendFlat(frameTris,movingMesh);
+        cockpit::Mesh dials;
+        cockpit::needles(dials,in->data,pl,std::fabs(car->hd.wheel_speed/4096.f*.3f)*3.6f,rpm);
+        appendFlat(frameTris,dials,true);
         drawTris(fixedImported,rotation,translation);drawTris(frameTris,rotation,translation);
     } else {
         cockpit::controls(movingMesh,p,angle,std::fabs(car->hd.wheel_speed/4096.f*.3f)*3.6f,rpm,showDriver);

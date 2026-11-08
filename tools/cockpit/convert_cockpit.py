@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a glTF/GLB car with interior into a REDRIVER2 cockpit (.rdc).
+"""Convert a glTF/GLB car with interior into a REDRIVER2 cockpit (.rdc, version 2).
 
 The result keeps the PlayStation look of Driver 2: one 256x256 atlas, 8-bit UVs,
 15-bit colours with ordered dither, a few thousand triangles. Only the cabin is
@@ -91,6 +91,57 @@ def main():
     seat = np.array([centre[0], np.percentile(seat_zone[:, 1], 90) if len(seat_zone) else centre[1] - .35, centre[2] - .55])
     eye = np.array([centre[0], seat[1] + .64, centre[2] - .62])  # 1.80 m adult, reclined seat
 
+    # Instruments: chrome dial rings behind the wheel (RANSAC circle fit on bright,
+    # driver-facing surfaces); otherwise two virtual dials either side of the column.
+    tex_l = np.asarray(src.convert('L')).astype(float); TH, TW = tex_l.shape
+    cand, cand_b, cand_n = [], [], []
+    for p in interior:
+        P = frame(p['pos'], o.forward)
+        for f in p['idx']:
+            f = f[FLIP]; T = P[f]; c = T.mean(0)
+            if abs(c[0] - centre[0]) > .32 or not (centre[1] - .08 < c[1] < centre[1] + .30) or not (centre[2] + .02 < c[2] < centre[2] + .45): continue
+            n = np.cross(T[1] - T[0], T[2] - T[0]); ln = np.linalg.norm(n)
+            if ln == 0 or n[2] / ln > -.4: continue
+            uv = p['uv'][f].mean(0)
+            cand.append(c); cand_n.append(n / ln); cand_b.append(tex_l[int((uv[1] % 1) * (TH - 1)), int((uv[0] % 1) * (TW - 1))])
+    cand = np.array(cand); cand_b = np.array(cand_b); cand_n = np.array(cand_n)
+    dials = []
+    if len(cand) > 20:
+        q = cand[cand_b >= max(np.percentile(cand_b, 55), 35)][:, :2].copy(); rng = np.random.default_rng(1)
+        for _ in range(4):
+            best = None
+            for _ in range(3000):
+                if len(q) < 10: break
+                a_, b_, c_ = q[rng.choice(len(q), 3, replace=False)]
+                d = 2 * (a_[0] * (b_[1] - c_[1]) + b_[0] * (c_[1] - a_[1]) + c_[0] * (a_[1] - b_[1]))
+                if abs(d) < 1e-9: continue
+                ux = ((a_ @ a_) * (b_[1] - c_[1]) + (b_ @ b_) * (c_[1] - a_[1]) + (c_ @ c_) * (a_[1] - b_[1])) / d
+                uy = ((a_ @ a_) * (c_[0] - b_[0]) + (b_ @ b_) * (a_[0] - c_[0]) + (c_ @ c_) * (b_[0] - a_[0])) / d
+                r = np.hypot(a_[0] - ux, a_[1] - uy)
+                if not .02 < r < .08: continue
+                inl = np.abs(np.hypot(q[:, 0] - ux, q[:, 1] - uy) - r) < .005
+                ang = np.arctan2(q[inl, 1] - uy, q[inl, 0] - ux)
+                score = inl.sum() if len(np.unique(((ang + np.pi) // (np.pi / 6)).astype(int))) >= 9 else 0
+                if best is None or score > best[0]: best = (score, ux, uy, r, inl)
+            if best is None or best[0] < 10: break
+            dials.append((best[1], best[2], best[3])); q = q[~best[4]]
+    def surface_z(x, y):
+        # Instrument faces sit well beyond the column shroud and the hub.
+        far = cand[cand[:, 2] > centre[2] + .12] if len(cand) else cand
+        d = np.hypot(far[:, 0] - x, far[:, 1] - y) if len(far) else np.array([])
+        return far[d.argmin(), 2] if len(d) else centre[2] + .2
+    dials.sort(key=lambda d: -d[2]); real = len(dials) >= 2
+    if real:
+        big = [d for d in dials if d[2] > dials[0][2] * .85][:2]
+        if len(big) < 2: big = dials[:2]
+        big.sort(key=lambda d: abs(d[0] - centre[0]))  # speedometer nearest the column
+        gauges = [(x, y, surface_z(x, y) - .004, r) for x, y, r in big]
+    else:
+        gy = centre[1] + radius * .45
+        gz = min(surface_z(centre[0] + dx, gy) for dx in (-.07, .07)) - .004  # nearest visible face
+        gauges = [(centre[0] + dx, gy, gz, .035) for dx in (-.07, .07)]
+    dial_n = cand_n.mean(0) if len(cand_n) else np.array([0, .3, -.95]); dial_n /= np.linalg.norm(dial_n)
+
     def visible(P):
         # Interior surfaces are single sided: drop faces whose back is towards the
         # seated driver's head (never seen from the driver's seat).
@@ -147,9 +198,11 @@ def main():
     roof_front = rp[rp[:, 1] > roof_y - .06][:, 2].max()
 
     with open(o.output, 'wb') as f:
-        f.write(b'RD2C'); f.write(struct.pack('<II', 1, len(tris)))
+        f.write(b'RD2C'); f.write(struct.pack('<II', 2, len(tris)))
         meta = [*lo, *hi, roof_y, roof_front, *seat, *centre, *axis, radius, *eye]
-        meta += [0.0] * (28 - len(meta))  # reserved, the header is always 28 floats
+        meta += [0.0] * (28 - len(meta))  # version 1 header: 28 floats
+        for g in gauges: meta += list(map(float, g))  # speedometer, tachometer: centre, radius
+        meta += [*map(float, dial_n), 1.0 if real else 0.0]  # dial face normal, detected rings
         f.write(struct.pack('<%df' % len(meta), *meta))
         credit = o.credit.encode('utf8')[:255]; f.write(struct.pack('<B', len(credit))); f.write(credit)
         f.write(atlas.tobytes())
@@ -158,6 +211,7 @@ def main():
             f.write(struct.pack('<4B', col[0], col[1], col[2], part))
     Image.fromarray(atlas).save(os.path.splitext(o.output)[0] + '_atlas.png')
     print(f'{o.output}: {len(tris)} triangles ({sum(1 for t in tris if t[3]==1)} wheel), '
+          f'{"dials" if real else "virtual dials"} {[tuple(round(v, 3) for v in g) for g in gauges]}, '
           f'car {hi-lo} m, roof {roof_y:.2f} front {roof_front:.2f}, wheel {centre.round(3)} r={radius:.3f} axis {axis.round(2)}, seat {seat.round(3)}')
 
 if __name__ == '__main__':

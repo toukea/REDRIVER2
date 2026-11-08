@@ -78,7 +78,24 @@ int main(){
         std::remove(path);
         Imported bad;FILE* g=std::fopen(path,"wb");std::fwrite("NOPE",1,4,g);std::fclose(g);
         check(!loadImported(path,bad) && !bad.valid,"invalid interior rejected");std::remove(path);
-        Imported real;if(loadImported("data/cockpits/duke69.rdc",real))check(real.tris.size()>1500 && real.radius>.1f,"bundled Duke interior is valid");
+        check(!in.hasDials,"version 1 interiors have no instrument data");
+        {
+            FILE* h=std::fopen(path,"wb");std::fwrite("RD2C",1,4,h);unsigned v2=2,n2=1;std::fwrite(&v2,4,1,h);std::fwrite(&n2,4,1,h);
+            float m2[40]={-0.9f,0,-2.6f, 0.9f,1.4f,2.6f, 1.38f,0.45f, -0.34f,0.62f,-0.23f, -0.34f,0.86f,0.32f, 0,0.5f,-0.866f, 0.15f, -0.34f,1.3f,-0.3f};
+            float dials[12]={-0.29f,0.91f,0.52f,0.048f, -0.16f,0.91f,0.52f,0.048f, 0,0.3f,-0.95f, 1};std::memcpy(m2+28,dials,sizeof(dials));
+            std::fwrite(m2,sizeof(m2),1,h);unsigned char l2=0;std::fwrite(&l2,1,1,h);
+            std::vector<unsigned char> px(256*256*3,90);std::fwrite(px.data(),1,px.size(),h);
+            float t[9]={-.3f,.5f,.2f,.3f,.5f,.2f,0,1,.2f};std::fwrite(t,sizeof(t),1,h);unsigned char e[10]={0};std::fwrite(e,1,10,h);std::fclose(h);
+            Imported v;check(loadImported(path,v) && v.hasDials && v.realDials,"version 2 instrument dials load");
+            Placement pl2;pl2.scale=100;
+            Mesh idle,fast;needles(idle,v,pl2,0,800);needles(fast,v,pl2,180,7000);
+            check(idle.triangles.size()==4 && fast.triangles.size()==4,"two needles with hubs");
+            Vec c0=mapPoint(pl2,v.dials[0].centre);
+            check(idle.triangles[0].b.x<c0.x && fast.triangles[0].b.x>c0.x,"speedometer needle sweeps clockwise with speed");
+            check(std::fabs(length(idle.triangles[0].b-c0)-v.dials[0].radius*.78f*100)<1.5f,"needle stays within the dial");
+            std::remove(path);
+        }
+        Imported real;if(loadImported("data/cockpits/duke69.rdc",real))check(real.tris.size()>1500 && real.radius>.1f && real.hasDials && real.realDials,"bundled Duke interior has its dials");
     }
     std::printf("PASS: %d cockpit geometry/pose/clipping checks\n",checks);
 }

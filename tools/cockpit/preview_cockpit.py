@@ -4,7 +4,8 @@ import struct, sys, numpy as np
 from PIL import Image
 def load(path):
     b = open(path, 'rb').read(); assert b[:4] == b'RD2C'
-    n = struct.unpack_from('<I', b, 8)[0]; meta = struct.unpack_from('<28f', b, 12); p = 12 + 112
+    ver, n = struct.unpack_from('<II', b, 4); count = 40 if ver >= 2 else 28
+    meta = struct.unpack_from('<%df' % count, b, 12); p = 12 + 4 * count
     ln = b[p]; p += 1 + ln
     atlas = np.frombuffer(b, np.uint8, 256 * 256 * 3, p).reshape(256, 256, 3).astype(np.float32); p += 256 * 256 * 3
     tris = []
