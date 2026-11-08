@@ -4,6 +4,7 @@
 // Include after driver2.h; no additions to original PSX/replay structures.
 void Cockpit_LoadConfig();
 bool Cockpit_Enabled();
+bool Cockpit_StartInside();
 int Cockpit_ViewPitch();
 cockpit::Profile Cockpit_Profile(const CAR_DATA* car);
 void Cockpit_EyeOffset(const CAR_DATA* car, VECTOR* offset);

@@ -6,6 +6,8 @@ Une branche distincte `wheel-controller-cockpit`, issue de `wheel-controller-ffb
 
 Le champ réservé des frames `.wheel` v2 contient maintenant l'angle visuel du volant en dixièmes de degré lorsque le bit 32 est présent ; la taille reste 28 octets et les anciens v2 restent lisibles. Le cockpit a été observé à Chicago, mais la validation de tous les modèles, des grandes rotations et du replay en conduite n'est pas acquise. OpenXR reste un chantier distinct. Préserver la calibration utilisateur `data/wheel.ini` et les fichiers non suivis préexistants.
 
+La passe de rendu suivante ajoute un atlas pixel original 256×256 (`utils/cockpit_atlas.h`), tableau de bord ancien, instruments texturés, aiguilles, radio, garnitures et bras effilés. `fit_model=1` utilise les sommets du modèle extérieur intact pour placer le toit/pare-brise et les yeux ; le repli reste disponible, et les réglages sont remplaçables par modèle. `start_in_cockpit=1` est fourni pour les nouvelles conduites. Observations : Chicago 1, Chicago 8 et Vegas 12, avec points de vue adaptés à leur hauteur. Les 510 contrôles passent. Le prototype initial est sauvegardé et poussé sous `c4185e86` sur `fork/wheel-controller-cockpit`.
+
 État documenté le 7 novembre 2026. Ce fichier vise un agent qui ne dispose pas de l'historique de conversation. Les références de code ci-dessous sont relatives à la racine du dépôt.
 
 ## Objectif utilisateur et périmètre

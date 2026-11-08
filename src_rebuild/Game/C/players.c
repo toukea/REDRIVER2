@@ -13,6 +13,10 @@
 #include "sound.h"
 #include "felony.h"
 #include "shadow.h"
+#ifndef PSX
+#include "cockpit.h"
+#include "camera.h"
+#endif
 
 PLAYER player[MAX_PLAYERS];
 
@@ -48,6 +52,10 @@ void InitPlayer(PLAYER *locPlayer, CAR_DATA *cp, char carCtrlType, int direction
 		
 		locPlayer->worldCentreCarId = cp->id;
 		locPlayer->cameraView = 0;// (NumPlayers == 2) << 1; // [A]
+#ifndef PSX
+		if (carCtrlType == CONTROL_TYPE_PLAYER && Cockpit_StartInside())
+			locPlayer->cameraView = CAMERA_VIEW_COCKPIT;
+#endif
 		locPlayer->playerCarId = cp->id;
 		locPlayer->playerType = PLAYER_TYPE_CAR;
 		locPlayer->spoolXZ = (VECTOR *)cp->hd.where.t;

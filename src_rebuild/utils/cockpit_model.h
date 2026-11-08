@@ -25,6 +25,8 @@ struct Profile {
     float width, floor, roof, front, rear;
     Vec eye, wheel;
     float radius, tilt;
+    float roofWidth, roofFront, roofRear;
+    bool meshFitted=false;
 };
 inline Profile profile(Family family, float halfWidth, float halfHeight, float halfLength) {
     Profile p;
@@ -35,15 +37,43 @@ inline Profile profile(Family family, float halfWidth, float halfHeight, float h
     p.front=l*(family==Truck?.78f:.32f);
     p.rear=family==Truck?p.front-180.f:-l*.68f;
     p.eye={-p.width*.48f,p.roof-30,p.front-(family==Truck?100.f:125.f)};
-    p.wheel=p.eye+Vec(0,-32,78);
-    p.radius=family==Truck?26.f:22.f;
+    p.wheel=p.eye+Vec(0,-38,family==Truck?66.f:96.f);
+    p.radius=family==Truck?23.f:19.f;
     p.tilt=family==Truck?50.f:20.f;
+    p.roofWidth=p.width*.82f;p.roofFront=p.front-35;p.roofRear=p.rear+20;
     return p;
 }
 // Only use a size heuristic as a fallback; model-specific configuration wins.
 inline Family classify(float halfHeight, float halfLength) {
     if(halfHeight>145 || (halfLength>580 && halfHeight>120)) return Truck;
     return halfLength<260 || halfHeight<78?TwoSeat:FourSeat;
+}
+// Fit the unmodified exterior mesh, not the collision box or dented car.
+// Roof edges anchor the height; narrow central beacons are excluded.
+inline Profile fitProfile(Family family,float halfWidth,float halfHeight,float halfLength,const std::vector<Vec>& points) {
+    auto p=profile(family,halfWidth,halfHeight,halfLength);
+    if(points.size()<12)return p;
+    std::vector<Vec> candidates;
+    float maxZ=-1e6f,minZ=1e6f;
+    for(auto v:points){maxZ=std::max(maxZ,v.z);minZ=std::min(minZ,v.z);}
+    for(auto v:points)if(std::isfinite(v.y) && (family!=Truck || v.z>minZ+(maxZ-minZ)*.65f))candidates.push_back(v);
+    if(candidates.size()<4)return p;
+    float edge=-1e6f;
+    for(auto v:candidates)if(std::fabs(v.x)>=halfWidth*.5f)edge=std::max(edge,v.y);
+    float roof=-1e6f;
+    for(auto v:candidates)if(v.y<=edge+(family==Truck?24.f:14.f))roof=std::max(roof,v.y);
+    float front=-1e6f,rear=1e6f,width=0;int count=0;
+    for(auto v:candidates)if(v.y>=roof-14 && v.y<=roof+8){front=std::max(front,v.z);rear=std::min(rear,v.z);width=std::max(width,std::fabs(v.x));++count;}
+    if(count<2 || width<30 || roof<35)return p;
+    if(front-rear<25){if(family!=Truck)return p;rear=front-155;}
+    p.roof=roof-3;p.roofWidth=bound(width-3,p.width*.5f,p.width*.98f);
+    p.roofFront=front-4;p.roofRear=rear+4;
+    p.front=std::min(maxZ-5,front+(family==Truck?55.f:65.f));
+    p.rear=family==Truck?std::max(rear-20,front-195):rear-55;
+    float eyeZ=family==Truck?bound(front-76,rear+12,front-24):front-90;
+    p.eye={-p.width*.45f,p.roof-(family==Truck?36.f:28.f),eyeZ};
+    p.wheel=p.eye+Vec(0,-38,family==Truck?66.f:96.f);p.meshFitted=true;
+    return p;
 }
 // Wheel plane normal leans forward as tilt increases (truck wheel more horizontal).
 inline Vec wheelPoint(const Profile& p, float angle, float radial=1, float depth=0) {
@@ -62,11 +92,16 @@ inline Vec elbow(Vec shoulder, Vec wrist, float upper, float lower, int side) {
     return shoulder+axis*along+bend*height;
 }
 struct Color { unsigned char r,g,b; };
-struct Triangle { Vec a,b,c; Color color; };
+enum Material { Solid,Plastic,Vinyl,Cloth,Wood,Metal,SpeedDial,RpmDial,Radio,Leather,Carpet,Headliner,SmallDial };
+struct UV {float u,v;};
+struct Triangle { Vec a,b,c; Color color; Material material; UV uv[3]; };
 struct Mesh {
     std::vector<Triangle> triangles;
-    void tri(Vec a, Vec b, Vec c, Color color) { triangles.push_back({a,b,c,color}); }
-    void quad(Vec a,Vec b,Vec c,Vec d,Color color) {tri(a,b,c,color);tri(a,c,d,color);}
+    Material material=Solid;
+    void tri(Vec a, Vec b, Vec c, Color color) { triangles.push_back({a,b,c,color,material,{{0,0},{1,0},{1,1}}}); }
+    void quad(Vec a,Vec b,Vec c,Vec d,Color color) {
+        tri(a,b,c,color);tri(a,c,d,color);triangles.back().uv[1]={1,1};triangles.back().uv[2]={0,1};
+    }
     void box(Vec a,Vec b,Color c) {
         Color top={static_cast<unsigned char>(std::min(255,int(c.r)+12)),static_cast<unsigned char>(std::min(255,int(c.g)+12)),static_cast<unsigned char>(std::min(255,int(c.b)+12))};
         quad({a.x,a.y,a.z},{b.x,a.y,a.z},{b.x,b.y,a.z},{a.x,b.y,a.z},c);
@@ -86,96 +121,149 @@ struct Mesh {
         quad(a-u-v,a+u-v,a+u+v,a-u+v,c);
         quad(b-u-v,b-u+v,b+u+v,b+u-v,c);
     }
+    void tube(Vec a,Vec b,float r0,float r1,Color color,int sides=8) {
+        Vec axis=unit(b-a),u=unit(cross(axis,std::fabs(axis.y)<.9f?Vec(0,1,0):Vec(1,0,0))),v=unit(cross(axis,u));
+        for(int i=0;i<sides;++i){float t=i*2*pi/sides,t1=(i+1)*2*pi/sides;
+            Vec n=u*std::cos(t)+v*std::sin(t),n1=u*std::cos(t1)+v*std::sin(t1);
+            quad(a+n*r0,b+n*r1,b+n1*r1,a+n1*r0,color);tri(a,a+n1*r0,a+n*r0,color);tri(b,b+n*r1,b+n1*r1,color);
+        }
+    }
 };
 inline void seat(Mesh& m,float x,float z,const Profile& p) {
-    Color cloth={62,67,75};
+    Color cloth={112,105,90};m.material=Cloth;
     m.box({x-23,p.floor+15,z-22},{x+23,p.floor+27,z+25},cloth);
     m.box({x-23,p.floor+22,z-30},{x+23,p.eye.y-17,z-20},cloth);
     m.box({x-14,p.eye.y-17,z-29},{x+14,p.eye.y+8,z-21},cloth);
+    m.material=Vinyl;
+    m.box({x-25,p.floor+18,z-22},{x-20,p.floor+33,z+25},{90,83,72});
+    m.box({x+20,p.floor+18,z-22},{x+25,p.floor+33,z+25},{90,83,72});
 }
 inline void cabin(Mesh& m,const Profile& p) {
     m.triangles.clear();
-    Color trim={45,49,55}, frame={82,85,89}, dash={36,40,46};
+    Color trim={78,72,63}, frame={100,96,85}, dash={57,55,50};
     float w=p.width,f=p.front,r=p.rear, sill=p.eye.y-53;
-    m.box({-w,p.floor,r},{w,p.floor+6,f},trim);
-    m.box({-w,p.roof,r},{w,p.roof+5,f},trim);
+    m.material=Carpet;m.box({-w,p.floor,r},{w,p.floor+6,f},{100,91,77});
+    m.material=Headliner;
+    m.box({-p.roofWidth,p.roof,r},{p.roofWidth,p.roof+4,p.roofFront},frame);
+    m.material=Vinyl;
     m.box({-w,p.floor,r},{-w+7,sill,f},trim);
     m.box({w-7,p.floor,r},{w,sill,f},trim);
     m.box({-w,p.floor,r},{w,sill,r+7},trim);
     // Windshield, side and rear windows are actual holes. No opaque glazing.
-    m.bar({-w,sill,f},{-w*.82f,p.roof,f-25},5,frame);
-    m.bar({w,sill,f},{w*.82f,p.roof,f-25},5,frame);
-    m.bar({-w*.82f,p.roof,f-25},{w*.82f,p.roof,f-25},5,frame);
-    m.bar({-w,sill,r},{-w,p.roof,r},6,frame);
-    m.bar({w,sill,r},{w,p.roof,r},6,frame);
+    m.material=Headliner;
+    m.bar({-w,sill,f},{-p.roofWidth,p.roof,p.roofFront},3,frame);
+    m.bar({w,sill,f},{p.roofWidth,p.roof,p.roofFront},3,frame);
+    m.bar({-p.roofWidth,p.roof,p.roofFront},{p.roofWidth,p.roof,p.roofFront},3,frame);
+    m.bar({-w,sill,r},{-p.roofWidth,p.roof,p.roofRear},4,frame);
+    m.bar({w,sill,r},{p.roofWidth,p.roof,p.roofRear},4,frame);
+    // Window seals, armrests, pulls and winding handles retain the period styling.
+    for(int side=-1;side<=1;side+=2){
+        float x=w*side;
+        m.material=Leather;m.bar({x,sill,r},{x,sill,f},2,{34,32,28});
+        m.material=Vinyl;m.box({x-4,p.floor+20,p.eye.z-22},{x+4,sill-9,p.eye.z+46},trim);
+        m.material=Metal;m.bar({x-side*5.f,sill-17,p.eye.z+27},{x-side*5.f,sill-17,p.eye.z+43},1.2f,{160,157,143});
+        m.bar({x-side*5.f,sill-26,p.eye.z+62},{x-side*5.f,sill-35,p.eye.z+70},1.2f,{160,157,143});
+    }
     if(p.family==FourSeat) {
         for(int side=-1;side<=1;side+=2)
-            m.bar({w*side,sill,p.eye.z-65},{w*side,p.roof,p.eye.z-65},5,frame);
+            m.bar({w*side,sill,p.eye.z-65},{p.roofWidth*side,p.roof,p.eye.z-65},3,frame);
+        m.material=Cloth;
         m.box({-w+10,p.floor+15,r+15},{w-10,p.floor+28,r+58},{62,67,75});
         m.box({-w+10,p.floor+22,r+8},{w-10,p.eye.y-18,r+20},{62,67,75});
     }
     if(p.family==Truck) // rear bulkhead instead of a passenger compartment
         m.box({-w,sill,r},{w,p.roof,r+6},trim);
     seat(m,p.eye.x,p.eye.z-8,p);seat(m,-p.eye.x,p.eye.z-8,p);
-    m.box({-w+6,p.floor+15,f-45},{w-6,p.eye.y-40,f},dash);
-    m.box({-w+6,p.eye.y-40,f-52},{w-6,p.eye.y-34,f-5},trim);
-    // Center tunnel, shifter and radio/vents.
-    m.box({-12,p.floor+6,p.eye.z-25},{12,p.floor+34,f-40},trim);
-    m.bar({8,p.floor+34,p.eye.z+25},{8,p.floor+57,p.eye.z+20},2,frame);
-    m.box({4,p.floor+54,p.eye.z+16},{12,p.floor+61,p.eye.z+24},{20,22,25});
-    for(int i=0;i<3;++i)
-        m.box({-16.f+i*13,p.eye.y-48,f-45},{-6.f+i*13,p.eye.y-40,f-43},{12,15,18});
+    float panel=p.eye.z+(p.family==Truck?88.f:126.f),top=p.eye.y-25;
+    // Faceted padded dash: cowl, sloping top and recessed vertical fascia.
+    m.material=Plastic;
+    m.quad({-w+5,top-4,panel},{w-5,top-4,panel},{w-7,top+2,f},{-w+7,top+2,f},dash);
+    m.box({-w+5,top-35,panel},{w-5,top-4,panel+8},dash);
+    m.material=p.family==Truck?Plastic:Wood;
+    m.box({-w+7,top-31,panel-1},{w-7,top-21,panel+1},p.family==Truck?dash:Color{80,60,42});
+    // Gauge binnacle above the fascia; needles/faces are added by controls().
+    m.material=Vinyl;
+    m.box({p.eye.x-34,top-18,panel-3},{p.eye.x+34,top+7,panel+11},{36,35,31});
+    m.quad({p.eye.x-37,top+7,panel-6},{p.eye.x+37,top+7,panel-6},{p.eye.x+34,top+11,panel+17},{p.eye.x-34,top+11,panel+17},dash);
+    // Analog radio and simple heater controls, no contemporary touchscreen.
+    m.material=Radio;
+    m.quad({-19,top-17,panel-2},{19,top-17,panel-2},{19,top-3,panel-2},{-19,top-3,panel-2},{150,147,135});
+    m.material=Metal;
+    for(int i=0;i<3;++i)m.tube({-10.f+i*10,top-25,panel-4},{-10.f+i*10,top-25,panel-1},2,2,{122,119,108},8);
+    m.material=Plastic;
+    for(int side=-1;side<=1;side+=2){
+        float x=side*(w-19);
+        m.box({x-9,top-17,panel-2},{x+9,top-4,panel},dash);
+        m.material=Solid;
+        for(int j=0;j<4;++j)m.bar({x-8,top-15+j*3.f,panel-3},{x+8,top-15+j*3.f,panel-3},.5f,{20,20,18});
+    }
+    m.material=Vinyl;
+    m.box({-14,p.floor+6,p.eye.z-25},{14,p.floor+28,panel},trim);
+    m.material=Leather;m.box({-5,p.floor+28,p.eye.z+40},{9,p.floor+35,p.eye.z+54},{44,39,32});
+    m.material=Metal;m.tube({2,p.floor+33,p.eye.z+47},{2,p.floor+58,p.eye.z+43},1,1,{150,148,136});
+    m.material=Leather;m.tube({2,p.floor+56,p.eye.z+43},{2,p.floor+64,p.eye.z+43},4,3,{39,33,27});
+    // Mirror housing only; reflective rear rendering is a separate feature.
+    m.material=Plastic;m.bar({0,p.roof-3,p.roofFront+13},{0,p.roof-10,p.roofFront+15},.8f,dash);
+    m.box({-9,p.roof-14,p.roofFront+13},{9,p.roof-5,p.roofFront+17},dash);
+    m.material=Metal;m.quad({-8,p.roof-13,p.roofFront+12},{8,p.roof-13,p.roofFront+12},{8,p.roof-6,p.roofFront+12},{-8,p.roof-6,p.roofFront+12},{61,74,76});
+    m.material=Solid;
 }
-inline void gauge(Mesh& m, Vec center,float radius,float value) {
-    Color black={9,13,16}, tick={170,190,178};
-    for(int i=0;i<20;++i) {
-        float a=i*pi/10,b=(i+1)*pi/10;
-        m.tri(center,center+Vec(std::cos(a)*radius,std::sin(a)*radius,0),center+Vec(std::cos(b)*radius,std::sin(b)*radius,0),black);
-    }
-    for(int i=0;i<9;++i) {
-        float a=(210-i*30)*pi/180;
-        m.bar(center+Vec(std::cos(a)*radius*.78f,std::sin(a)*radius*.78f,-1),center+Vec(std::cos(a)*radius*.94f,std::sin(a)*radius*.94f,-1),.5f,tick);
-    }
+inline void gauge(Mesh& m, Vec center,float radius,float value,Material dial) {
+    m.material=dial;
+    m.quad(center+Vec(-radius,radius,0),center+Vec(radius,radius,0),center+Vec(radius,-radius,0),center+Vec(-radius,-radius,0),{128,128,122});
     float a=(210-bound(value,0,1)*240)*pi/180;
-    m.bar(center+Vec(0,0,-2),center+Vec(std::cos(a)*radius*.73f,std::sin(a)*radius*.73f,-2),.6f,{225,88,45});
+    m.material=Solid;
+    Vec tip=center+Vec(std::cos(a)*radius*.73f,std::sin(a)*radius*.73f,-1);
+    m.tri(center+Vec(-.5f,0,-1),tip,center+Vec(.5f,0,-1),{235,125,59});
 }
 inline void controls(Mesh& m,const Profile& p,float degrees,float speed,float rpm,bool driver) {
-    Color rubber={17,19,22}, metal={125,130,135}, shirt={72,88,110}, skin={183,137,99}, pants={39,47,62};
+    Color rubber={72,61,45}, metal={157,151,130}, shirt={96,113,130}, skin={193,148,108}, pants={58,67,78};
+    m.material=Leather;
     for(int i=0;i<32;++i) {
         float a=i*360.f/32,b=(i+1)*360.f/32;
         // Shared cross-section vertices avoid cracks between independent bars.
-        m.quad(wheelPoint(p,a,1.11f,2),wheelPoint(p,b,1.11f,2),wheelPoint(p,b,.89f,2),wheelPoint(p,a,.89f,2),rubber);
-        m.quad(wheelPoint(p,a,.89f,-2),wheelPoint(p,b,.89f,-2),wheelPoint(p,b,1.11f,-2),wheelPoint(p,a,1.11f,-2),rubber);
-        m.quad(wheelPoint(p,a,1.11f,-2),wheelPoint(p,b,1.11f,-2),wheelPoint(p,b,1.11f,2),wheelPoint(p,a,1.11f,2),rubber);
-        m.quad(wheelPoint(p,a,.89f,2),wheelPoint(p,b,.89f,2),wheelPoint(p,b,.89f,-2),wheelPoint(p,a,.89f,-2),rubber);
+        m.quad(wheelPoint(p,a,1.07f,1.5f),wheelPoint(p,b,1.07f,1.5f),wheelPoint(p,b,.93f,1.5f),wheelPoint(p,a,.93f,1.5f),rubber);
+        m.quad(wheelPoint(p,a,.93f,-1.5f),wheelPoint(p,b,.93f,-1.5f),wheelPoint(p,b,1.07f,-1.5f),wheelPoint(p,a,1.07f,-1.5f),rubber);
+        m.quad(wheelPoint(p,a,1.07f,-1.5f),wheelPoint(p,b,1.07f,-1.5f),wheelPoint(p,b,1.07f,1.5f),wheelPoint(p,a,1.07f,1.5f),rubber);
+        m.quad(wheelPoint(p,a,.93f,1.5f),wheelPoint(p,b,.93f,1.5f),wheelPoint(p,b,.93f,-1.5f),wheelPoint(p,a,.93f,-1.5f),rubber);
     }
     // Positive command is clockwise when viewed by the driver.
+    m.material=Metal;
     for(int i=0;i<3;++i) {
-        float a=30+i*120.f-degrees;
-        m.bar(wheelPoint(p,a,.12f),wheelPoint(p,a,.91f),2,metal);
+        float a=(i==0?180.f:i==1?0.f:270.f)-degrees;
+        m.quad(wheelPoint(p,a-9,.23f,1),wheelPoint(p,a-5,.94f,1),wheelPoint(p,a+5,.94f,1),wheelPoint(p,a+9,.23f,1),metal);
     }
-    m.bar(p.wheel,wheelPoint(p,0,0,5),7,rubber);
-    gauge(m,{p.eye.x-15,p.eye.y-45,p.front-53},12,speed/200);
-    gauge(m,{p.eye.x+15,p.eye.y-45,p.front-53},12,rpm/7000);
+    m.material=Leather;m.tube(p.wheel,wheelPoint(p,0,0,4),5,5,{53,48,39},12);
+    float face=p.eye.z+(p.family==Truck?83.f:121.f);
+    gauge(m,{p.eye.x-14,p.eye.y-29,face},11,speed/200,SpeedDial);
+    gauge(m,{p.eye.x+12,p.eye.y-29,face},11,rpm/8000,RpmDial);
+    gauge(m,{p.eye.x-30,p.eye.y-31,face},4,.65f,SmallDial);
+    gauge(m,{p.eye.x+29,p.eye.y-31,face},4,.5f,SmallDial);
     if(!driver) return;
     // Head deliberately omitted. The seat/torso, not the camera, owns the body.
     Vec hip={p.eye.x,p.floor+30,p.eye.z-10};
+    m.material=Cloth;
     m.box(hip+Vec(-17,0,-13),{p.eye.x+17,p.eye.y-20,p.eye.z+6},shirt);
     for(int side=-1;side<=1;side+=2) {
         Vec knee={p.eye.x+side*11.f,p.floor+23,p.eye.z+38};
         Vec ankle={p.eye.x+side*12.f,p.floor+10,p.eye.z+76};
-        m.bar(hip+Vec(side*10.f,0,0),knee,8,pants);m.bar(knee,ankle,6,pants);
-        m.box(ankle+Vec(-6,-6,-3),ankle+Vec(6,2,16),rubber);
+        m.material=Cloth;m.tube(hip+Vec(side*10.f,0,0),knee,8,7,pants);m.tube(knee,ankle,6,4,pants);
+        m.material=Leather;m.box(ankle+Vec(-5,-5,-3),ankle+Vec(5,2,14),rubber);
         // Simplified sliding grip above 100 degrees avoids impossible arm twists.
         // A later authored hand-over-hand clip can replace this pose generator.
         float grip=(side<0?180.f:0.f)-bound(degrees,-100,100);
         Vec wrist=wheelPoint(p,grip,1,3);
         Vec shoulder={p.eye.x+side*18.f,p.eye.y-24,p.eye.z-4};
-        float upper=p.family==Truck?62.f:56.f, lower=p.family==Truck?58.f:52.f;
+        float upper=64, lower=58;
         Vec joint=elbow(shoulder,wrist,upper,lower,side);
-        m.bar(shoulder,joint,6,shirt);m.bar(joint,wrist,4.5f,shirt);
-        m.bar(wrist,wheelPoint(p,grip+12,1,3),4,skin);
-        m.bar(wrist,wheelPoint(p,grip,.83f,1),2.5f,skin);
+        m.material=Cloth;m.tube(shoulder,joint,5.5f,4.5f,shirt);m.tube(joint,wrist,4.3f,3,shirt);
+        m.material=Solid;
+        m.tube(wrist,wheelPoint(p,grip+12,1,2),3.2f,2.6f,skin);
+        m.tube(wrist,wheelPoint(p,grip,.84f,1),1.6f,1.1f,skin,6);
+        for(int finger=0;finger<3;++finger){
+            float a=grip+3+finger*4.f;
+            m.tube(wheelPoint(p,a,1,3),wheelPoint(p,a,.98f,-1),.85f,.7f,skin,5);
+        }
     }
 }
 // Sutherland-Hodgman against the camera near plane, before GTE projection.
@@ -185,6 +273,18 @@ inline int clipNear(const Vec* input,int count,Vec* output,float nearZ) {
         Vec a=input[i],b=input[(i+1)%count];bool inside=a.z>=nearZ, next=b.z>=nearZ;
         if(inside) output[n++]=a;
         if(inside!=next) output[n++]=a+(b-a)*((nearZ-a.z)/(b.z-a.z));
+    }
+    return n;
+}
+struct ClipVertex {Vec position;UV uv;};
+inline int clipNearUV(const ClipVertex* input,int count,ClipVertex* output,float nearZ) {
+    int n=0;
+    for(int i=0;i<count;++i){auto a=input[i],b=input[(i+1)%count];
+        bool inside=a.position.z>=nearZ,next=b.position.z>=nearZ;
+        if(inside)output[n++]=a;
+        if(inside!=next){float t=(nearZ-a.position.z)/(b.position.z-a.position.z);
+            output[n++]={a.position+(b.position-a.position)*t,{a.uv.u+(b.uv.u-a.uv.u)*t,a.uv.v+(b.uv.v-a.uv.v)*t}};
+        }
     }
     return n;
 }

@@ -1,4 +1,5 @@
 #include "../src_rebuild/utils/cockpit_model.h"
+#include "../src_rebuild/utils/cockpit_atlas.h"
 #include <cstdio>
 #include <cstdlib>
 int checks=0;
@@ -31,5 +32,21 @@ int main(){
     check(classify(90,260)==FourSeat,"normal vehicle fallback is four-seat");
     check(classify(84,375)==FourSeat,"Chicago sedan length must not imply truck");
     check(classify(86,667)==FourSeat,"long low limousine must not imply truck");
+    std::vector<Vec> body;
+    for(int x:{-95,95})for(int z:{-110,55})for(int y:{-70,70})body.push_back({float(x),float(y),float(z)});
+    for(int x:{-20,20})for(int z:{-10,10})body.push_back({float(x),96,float(z)});
+    auto low=fitProfile(FourSeat,130,90,380,body);
+    check(low.meshFitted && low.roof<80,"police beacon does not raise the driver seat");
+    check(low.eye.y<low.roof && low.eye.y>low.floor,"fitted eyes remain below the physical roof");
+    auto fallback=fitProfile(FourSeat,130,90,380,{});
+    check(!fallback.meshFitted,"missing exterior mesh keeps usable fallback");
+    for(auto& v:body){v.y+=100;v.z+=400;}
+    auto high=fitProfile(Truck,160,180,650,body);
+    check(high.meshFitted && high.eye.y>low.eye.y+60,"high cab gives a higher viewpoint from mesh geometry");
+    ClipVertex uvIn[3]={{{-10,0,0},{0,0}},{{10,0,20},{1,0}},{{0,10,20},{1,1}}},uvOut[5];
+    int uvN=clipNearUV(uvIn,3,uvOut,10);
+    check(uvN==4 && std::fabs(uvOut[0].uv.u-.5f)<.001f,"near-plane intersection interpolates texture coordinates");
+    auto atlas=atlasPixels();check(atlas.size()==256*256*4,"complete original material atlas generated");
+    check(atlas[3]==255 && atlas[0]==128,"solid atlas tile is opaque neutral gray for PSX color modulation");
     std::printf("PASS: %d cockpit geometry/pose/clipping checks\n",checks);
 }
