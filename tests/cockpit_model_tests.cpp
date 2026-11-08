@@ -89,8 +89,12 @@ int main(){
             Imported v;check(loadImported(path,v) && v.hasDials && v.realDials,"version 2 instrument dials load");
             Placement pl2;pl2.scale=100;
             Mesh idle,fast;needles(idle,v,pl2,0,800);needles(fast,v,pl2,180,7000);
-            auto needle=[](const Mesh& m){for(const auto& t:m.triangles)if(t.color.r==235 && t.color.g==96)return t;return m.triangles[0];};
-            check(idle.triangles.size()==fast.triangles.size() && idle.triangles.size()>=60,"two lit dials: faces, ticks, needles, hubs");
+            auto needle=[&](const Mesh& m){for(const auto& t:m.triangles)if(t.color.r==v.needle.r && t.color.g==v.needle.g)return t;return m.triangles[0];};
+            check(idle.triangles.size()==fast.triangles.size() && idle.triangles.size()==14,"two needles with hubs over the painted dials");
+            Profile base=profile(FourSeat,100,90,260);base.roof=80;base.roofFront=40;
+            Placement pv=place(v,base,100,260,0);Profile withDials=base;applyImported(withDials,v,pv,1.80f);
+            Profile noDials=base;Imported plain=v;plain.hasDials=false;applyImported(noDials,plain,pv,1.80f);
+            check(std::fabs(withDials.eye.y-noDials.eye.y)<=.0601f*pv.scale,"instrument line of sight moves the eye at most 6 cm");
             Vec c0=mapPoint(pl2,v.dials[0].centre);
             check(needle(idle).b.x<c0.x && needle(fast).b.x>c0.x,"speedometer needle sweeps clockwise with speed");
             check(length(needle(idle).b-c0)<v.dials[0].radius*100 && length(needle(idle).b-c0)>v.dials[0].radius*70,"needle stays within the dial");

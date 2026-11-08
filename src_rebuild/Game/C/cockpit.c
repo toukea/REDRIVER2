@@ -194,7 +194,7 @@ void Cockpit_Draw(int view) {
     TextureID texture=0;
     ImportedCache* in=importedFor(car,p.family);
     if(in){
-        if(!in->texture)in->texture=GR_CreateRGBATexture(256,256,in->data.rgba.data());
+        if(!in->texture)in->texture=GR_CreateRGBATexture(in->data.atlasSize,in->data.atlasSize,in->data.rgba.data());
         texture=in->texture;
         const auto& box=car->ap.carCos->colBox;
         char section[64];snprintf(section,sizeof(section),"%s.%d",LevelNames[GameLevel],modelId(car));

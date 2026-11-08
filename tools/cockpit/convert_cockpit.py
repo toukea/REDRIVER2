@@ -48,6 +48,7 @@ def main():
     a.add_argument('--shell-color', default='46,42,38', help='roof/pillar colour seen from inside')
     a.add_argument('--floor-color', default='38,34,30')
     a.add_argument('--credit', default='')
+    a.add_argument('--atlas', type=int, default=512, choices=(256, 512), help='atlas size; the cockpit fills the screen, 512 keeps the instruments legible')
     a.add_argument('--shell-budget', type=int, default=900, help='max triangles for roof, pillars, doors and floor')
     o = a.parse_args()
 
@@ -65,14 +66,15 @@ def main():
     uv_all = np.concatenate([p['uv'] for p in interior + wheel])
     u0, v0 = np.floor(uv_all.min(0) * 8) / 8; u1, v1 = np.ceil(uv_all.max(0) * 8) / 8
     src = Image.open(img_path).convert('RGB'); W, H = src.size
-    crop = src.crop((int(u0 * W), int(v0 * H), int(u1 * W), int(v1 * H))).resize((256, 248), Image.LANCZOS)
+    S = o.atlas; SH = S * 248 // 256  # bottom 8/256 of the atlas: white strip for flat colours
+    crop = src.crop((int(u0 * W), int(v0 * H), int(u1 * W), int(v1 * H))).resize((S, SH), Image.LANCZOS)
     t = np.asarray(crop).astype(np.float32) * o.lift
     tint = TRIMS[o.trim]
     if tint is not None:
         lum = t.mean(-1, keepdims=True); sat = (t.max(-1, keepdims=True) - t.min(-1, keepdims=True)) / (t.max(-1, keepdims=True) + 1)
         neutral = np.clip(1 - sat * 4, 0, 1)
         t = t * (1 - neutral) + (lum / 255.0) * np.array(tint) * 1.6 * neutral
-    atlas = np.zeros((256, 256, 3), np.float32); atlas[:248] = t; atlas[248:] = 255
+    atlas = np.zeros((S, S, 3), np.float32); atlas[:SH] = t; atlas[SH:] = 255
     atlas = dither15(atlas)
 
     def uv8(uv):
@@ -154,7 +156,68 @@ def main():
         k = np.where(hit)[0][t[hit].argmin()]; n = np.cross(e1[k], e2[k]); n /= np.linalg.norm(n)
         if n[2] > 0: n = -n
         return pts[k] - d * .006, n
+    def painted_dials():
+        # Render what the driver sees of the cluster with the full-resolution
+        # texture, find the painted dials as circles on screen (OpenCV Hough),
+        # pick the matching pair, and cast rays back to the dash for 3D centres.
+        try:
+            import cv2
+        except ImportError:
+            return None
+        look = centre + np.array([0, radius * .5, .15]) - eye; look /= np.linalg.norm(look)
+        right = np.cross(np.array([0, 1., 0]), look); right /= np.linalg.norm(right)
+        if right[0] < 0: right = -right
+        up = np.cross(look, right); up = up if up[1] > 0 else -up
+        W, H = 960, 640; foc = W / 2 / np.tan(np.radians(34) / 2)
+        texf = np.asarray(src).astype(np.float32); TH2, TW2 = texf.shape[:2]
+        img = np.zeros((H, W, 3), np.float32); zb = np.full((H, W), 1e9)
+        for p in interior:
+            P = frame(p['pos'], o.forward)
+            for fidx in p['idx']:
+                fidx = fidx[FLIP]; V = P[fidx] - eye; UV = p['uv'][fidx]
+                z = V @ look; x = V @ right; y = V @ up
+                if z.min() < .05: continue
+                pts = np.c_[W / 2 + x / z * foc, H / 2 - y / z * foc]
+                x0, y0 = np.maximum(np.floor(pts.min(0)).astype(int), 0); x1, y1 = np.minimum(np.ceil(pts.max(0)).astype(int), [W - 1, H - 1])
+                if x0 > x1 or y0 > y1: continue
+                ys, xs = np.mgrid[y0:y1 + 1, x0:x1 + 1] + .5
+                (a1, b1), (a2, b2), (a3, b3) = pts; den = (b2 - b3) * (a1 - a3) + (a3 - a2) * (b1 - b3)
+                if abs(den) < 1e-12: continue
+                l1 = ((b2 - b3) * (xs - a3) + (a3 - a2) * (ys - b3)) / den; l2 = ((b3 - b1) * (xs - a3) + (a1 - a3) * (ys - b3)) / den; l3 = 1 - l1 - l2
+                ins = (l1 >= 0) & (l2 >= 0) & (l3 >= 0)
+                if not ins.any(): continue
+                zz = 1 / (l1 / z[0] + l2 / z[1] + l3 / z[2]); yy = ys[ins].astype(int); xx = xs[ins].astype(int); zi = zz[ins]; ok = zi < zb[yy, xx]
+                if not ok.any(): continue
+                u = ((l1 * UV[0, 0] / z[0] + l2 * UV[1, 0] / z[1] + l3 * UV[2, 0] / z[2]) * zz)[ins][ok]
+                v = ((l1 * UV[0, 1] / z[0] + l2 * UV[1, 1] / z[1] + l3 * UV[2, 1] / z[2]) * zz)[ins][ok]
+                img[yy[ok], xx[ok]] = texf[((v % 1) * (TH2 - 1)).astype(int), ((u % 1) * (TW2 - 1)).astype(int)]; zb[yy[ok], xx[ok]] = zi[ok]
+        g = cv2.GaussianBlur(cv2.cvtColor(img.clip(0, 255).astype(np.uint8), cv2.COLOR_RGB2GRAY), (5, 5), 1.2)
+        found = cv2.HoughCircles(g, cv2.HOUGH_GRADIENT, dp=1.2, minDist=30, param1=80, param2=24, minRadius=14, maxRadius=110)
+        if found is None: return None
+        C = found[0][:12]; best = None
+        for i in range(len(C)):
+            for j in range(i + 1, len(C)):
+                (xa, ya, ra), (xb, yb, rb) = C[i], C[j]; rm = (ra + rb) / 2
+                if abs(ya - yb) > .25 * rm or abs(ra - rb) > .2 * rm or abs(xa - xb) < 1.6 * rm: continue
+                score = ra + rb - 3 * abs(ra - rb) - 3 * abs(ya - yb)
+                if best is None or score > best[0]: best = (score, C[i], C[j])
+        if best is None: return None
+        out, normals = [], []
+        for cx, cy, r in best[1:]:
+            d = look * foc + right * (cx - W / 2) - up * (cy - H / 2)
+            hit, hn = raycast(eye + d)
+            if hit is None: return None
+            depth = (hit - eye) @ look
+            # Needle colour: the light paint of the dial (ticks and numerals).
+            yy, xx = np.mgrid[int(max(0, cy - r)):int(min(H, cy + r)), int(max(0, cx - r)):int(min(W, cx + r))]
+            ring = img[yy, xx][((xx - cx) ** 2 + (yy - cy) ** 2 < (r * .9) ** 2)]
+            lum = ring.mean(1); paint = ring[lum >= np.percentile(lum, 97)].mean(0) if len(ring) else np.array([220, 210, 190])
+            out.append((hit[0], hit[1], hit[2], r * depth / foc * .95, paint)); normals.append(hn)
+        out.sort(key=lambda g: abs(g[0] - centre[0]))  # speedometer nearest the column
+        return out, np.mean(normals, 0)
+
     dials.sort(key=lambda d: -d[2]); real = len(dials) >= 2
+    needle_colour = np.array([235, 225, 200])
     if real:
         big = [d for d in dials if d[2] > dials[0][2] * .85][:2]
         if len(big) < 2: big = dials[:2]
@@ -165,8 +228,14 @@ def main():
             z = surface_z(x, y, r) - .006
             gauges.append((x, y, min(z, hit[2]) if hit is not None else z, r))
     else:
-        # Virtual pair seen through the upper half of the wheel, either side of the column.
+        painted = painted_dials()
         gauges, normals = [], []
+    if not real and painted:
+        gauges = [g[:4] for g in painted[0]]; cand_n = np.array([painted[1]]); real = True
+        paint = np.mean([g[4] for g in painted[0]], 0)
+        needle_colour = np.clip(paint * 230 / max(1, paint.max()), 0, 255)  # same hue, readable brightness
+    elif not real:
+        # Virtual pair seen through the upper half of the wheel, either side of the column.
         for dx in (-.065, .065):
             hit, hn = raycast(centre + np.array([dx, radius * .62, 0]))
             if hit is not None: gauges.append((hit[0], hit[1], hit[2], .04)); normals.append(hn)
@@ -236,6 +305,8 @@ def main():
     with open(o.output, 'wb') as f:
         f.write(b'RD2C'); f.write(struct.pack('<II', 2, len(tris)))
         meta = [*lo, *hi, roof_y, roof_front, *seat, *centre, *axis, radius, *eye]
+        meta += [float(v) for v in needle_colour]  # [21..23] needle paint (0-255)
+        meta += [float(S)]  # [24] atlas size (0 or 256 in older files)
         meta += [0.0] * (28 - len(meta))  # version 1 header: 28 floats
         for g in gauges: meta += list(map(float, g))  # speedometer, tachometer: centre, radius
         meta += [*map(float, dial_n), 1.0 if real else 0.0]  # dial face normal, detected rings
@@ -247,7 +318,7 @@ def main():
             f.write(struct.pack('<4B', col[0], col[1], col[2], part))
     Image.fromarray(atlas).save(os.path.splitext(o.output)[0] + '_atlas.png')
     print(f'{o.output}: {len(tris)} triangles ({sum(1 for t in tris if t[3]==1)} wheel), '
-          f'{"dials" if real else "virtual dials"} {[tuple(round(v, 3) for v in g) for g in gauges]}, '
+          f'{"dials" if real else "virtual dials"} {[tuple(round(float(v), 3) for v in g) for g in gauges]} needles {needle_colour.astype(int).tolist()}, '
           f'car {hi-lo} m, roof {roof_y:.2f} front {roof_front:.2f}, wheel {centre.round(3)} r={radius:.3f} axis {axis.round(2)}, seat {seat.round(3)}')
 
 if __name__ == '__main__':

@@ -15,9 +15,11 @@ struct Imported {
     float roofY=0, roofFront=0, radius=0;
     struct Dial { Vec centre; float radius=0; } dials[2];  // speedometer, tachometer
     Vec dialNormal;  // towards the driver
+    Color needle={235,225,200};  // taken from the dial paint
     bool hasDials=false, realDials=false;
     std::string credit;
-    std::vector<unsigned char> rgba;      // 256*256*4
+    int atlasSize=256;
+    std::vector<unsigned char> rgba;      // atlasSize^2 * 4
     std::vector<ImportedTri> tris;
     bool valid=false;
 };
@@ -30,7 +32,8 @@ inline bool loadImported(const char* path, Imported& out) {
     ok=ok && !std::memcmp(magic,"RD2C",4) && (version==1 || version==2) && count>0 && count<=20000;
     float meta[40]={}; rd(meta,(version>=2?40:28)*sizeof(float));
     unsigned char len=0; rd(&len,1); char credit[256]={}; rd(credit,len);
-    std::vector<unsigned char> rgb(256*256*3); if(ok) rd(rgb.data(),rgb.size());
+    int size=(version>=2 && (int(meta[24])==512 || int(meta[24])==256))?int(meta[24]):256;
+    std::vector<unsigned char> rgb(size_t(size)*size*3); if(ok) rd(rgb.data(),rgb.size());
     if(ok){
         out.lo={meta[0],meta[1],meta[2]}; out.hi={meta[3],meta[4],meta[5]};
         out.roofY=meta[6]; out.roofFront=meta[7];
@@ -40,10 +43,11 @@ inline bool loadImported(const char* path, Imported& out) {
         if(version>=2){
             for(int i=0;i<2;++i){ out.dials[i].centre={meta[28+i*4],meta[29+i*4],meta[30+i*4]}; out.dials[i].radius=meta[31+i*4]; }
             out.dialNormal=unit({meta[36],meta[37],meta[38]}); out.realDials=meta[39]>.5f;
+            if(meta[21]+meta[22]+meta[23]>30) out.needle={(unsigned char)bound(meta[21],0,255),(unsigned char)bound(meta[22],0,255),(unsigned char)bound(meta[23],0,255)};
             out.hasDials=out.dials[0].radius>.01f && out.dials[0].radius<.15f && out.dials[1].radius>.01f && out.dials[1].radius<.15f;
         }
-        out.rgba.resize(256*256*4);
-        for(int i=0;i<256*256;++i){ out.rgba[i*4]=rgb[i*3]; out.rgba[i*4+1]=rgb[i*3+1]; out.rgba[i*4+2]=rgb[i*3+2]; out.rgba[i*4+3]=255; }
+        out.atlasSize=size; out.rgba.resize(size_t(size)*size*4);
+        for(int i=0;i<size*size;++i){ out.rgba[i*4]=rgb[i*3]; out.rgba[i*4+1]=rgb[i*3+1]; out.rgba[i*4+2]=rgb[i*3+2]; out.rgba[i*4+3]=255; }
         out.tris.resize(count);
         for(auto& t:out.tris){
             float v[9]; unsigned char extra[10];
@@ -81,28 +85,36 @@ inline void applyImported(Profile& p, const Imported& m, const Placement& pl, fl
     p.tilt=bound(std::atan2(m.axis.y,-m.axis.z)*180/pi,0,65);
     p.floor=seat.y-30;  // the procedural hips sit 30 units above "floor"
     p.eye={wheel.x, std::min(seat.y+seated,p.roof-.10f*pl.scale), seat.z-.07f*pl.scale};
+    // Line of sight to the instruments through the upper half of the wheel, as
+    // in a real car: the eye moves at most 6 cm from its stature-based height.
+    if(m.hasDials){
+        Vec g=mapPoint(pl,(m.dials[0].centre+m.dials[1].centre)*.5f);
+        float t=p.tilt*pi/180, target=wheel.y+p.radius*.55f*std::cos(t), zw=wheel.z+p.radius*.55f*std::sin(t);
+        if(g.z-zw>1 && zw-p.eye.z>1){
+            float aligned=(target*(g.z-p.eye.z)-g.y*(zw-p.eye.z))/(g.z-zw);
+            float slack=.06f*pl.scale;
+            p.eye.y=std::min(bound(aligned,p.eye.y-slack,p.eye.y+slack),p.roof-.08f*pl.scale);
+        }
+    }
 }
-// Live instruments over the imported cluster. The source textures are too small
-// to read at PSX resolution, so each dial gets a bright face, 30-degree ticks, a
-// long needle and a hub: 240 degree sweep, 200 km/h and 8000 rpm. Driver units.
+// Live needles over the dials painted in the imported cluster texture, in the
+// colour of that paint so they belong to the dashboard: 240 degree sweep,
+// 200 km/h and 8000 rpm, thin needle and a small dark hub. Driver units.
 inline void needles(Mesh& m, const Imported& in, const Placement& pl, float speedKmh, float rpm) {
     if(!in.hasDials) return;
     Vec n=in.dialNormal, up=unit(Vec(0,1,0)-n*n.y), right=unit(cross(up,n));
     if(right.x<0) right=right*-1;
     const float values[2]={speedKmh/200, rpm/8000};
-    const Color face={232,222,190}, ink={34,30,26}, red={235,96,36};
+    const Color hub={26,24,22};
     m.material=Solid;
-    auto at=[&](Vec c,float r,float deg,float lift){ float a=deg*pi/180; return mapPoint(pl,c+n*lift+(right*std::cos(a)+up*std::sin(a))*r); };
     for(int i=0;i<2;++i){
-        const auto& d=in.dials[i]; float r=d.radius*.92f; Vec c=d.centre;
-        for(int k=0;k<16;++k) m.tri(mapPoint(pl,c+n*.001f),at(c,r,k*22.5f+22.5f,.001f),at(c,r,k*22.5f,.001f),face);
-        for(int k=0;k<=8;++k){ float deg=210-k*30.f, w=k%2?1.2f:2.2f;
-            m.tri(at(c,r*.97f,deg-w,.002f),at(c,r*.97f,deg+w,.002f),at(c,r*(k%2?.84f:.76f),deg,.002f),ink); }
-        float deg=210-bound(values[i],0,1)*240, a=deg*pi/180;
-        Vec dir=right*std::cos(a)+up*std::sin(a), side=right*-std::sin(a)+up*std::cos(a), h=c+n*.003f;
-        float w=std::max(.003f,r*.1f);
-        m.tri(mapPoint(pl,h-dir*(r*.2f)+side*w),mapPoint(pl,h+dir*(r*.9f)),mapPoint(pl,h-dir*(r*.2f)-side*w),red);
-        for(int k=0;k<6;++k) m.tri(mapPoint(pl,h+n*.001f),at(c,w*1.8f,k*60.f+60,.004f),at(c,w*1.8f,k*60.f,.004f),ink);
+        const auto& d=in.dials[i]; float r=d.radius;
+        float a=(210-bound(values[i],0,1)*240)*pi/180;
+        Vec dir=right*std::cos(a)+up*std::sin(a), side=right*-std::sin(a)+up*std::cos(a), c=d.centre+n*.003f;
+        float w=std::max(.0022f,r*.055f);
+        m.tri(mapPoint(pl,c-dir*(r*.18f)+side*w),mapPoint(pl,c+dir*(r*.86f)),mapPoint(pl,c-dir*(r*.18f)-side*w),in.needle);
+        for(int k=0;k<6;++k){ float a0=k*pi/3, a1=(k+1)*pi/3; Vec h=c+n*.001f;
+            m.tri(mapPoint(pl,h),mapPoint(pl,h+(right*std::cos(a1)+up*std::sin(a1))*(w*1.6f)),mapPoint(pl,h+(right*std::cos(a0)+up*std::sin(a0))*(w*1.6f)),hub); }
     }
 }
 // Steering rotation about the column, matching wheelPoint(): positive command is

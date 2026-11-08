@@ -7,7 +7,8 @@ def load(path):
     ver, n = struct.unpack_from('<II', b, 4); count = 40 if ver >= 2 else 28
     meta = struct.unpack_from('<%df' % count, b, 12); p = 12 + 4 * count
     ln = b[p]; p += 1 + ln
-    atlas = np.frombuffer(b, np.uint8, 256 * 256 * 3, p).reshape(256, 256, 3).astype(np.float32); p += 256 * 256 * 3
+    S = int(meta[24]) if ver >= 2 and int(meta[24]) in (256, 512) else 256
+    atlas = np.frombuffer(b, np.uint8, S * S * 3, p).reshape(S, S, 3).astype(np.float32); p += S * S * 3
     tris = []
     for _ in range(n):
         v = np.array(struct.unpack_from('<9f', b, p)).reshape(3, 3); e = b[p + 36:p + 46]; p += 46
@@ -20,19 +21,13 @@ def needles(meta, speed_kmh, rpm):
     up = np.array([0, 1., 0]) - n * n[1]; up /= np.linalg.norm(up)
     right = np.cross(up, n); right /= np.linalg.norm(right)
     if right[0] < 0: right = -right
+    paint = np.array(meta[21:24]) if sum(meta[21:24]) > 30 else np.array([235., 225, 200])
     white = np.array([[128, 252], [129, 252], [128, 253]], float); out = []
-    def at(c, r, deg, lift):
-        a = np.radians(deg); return c + n * lift + (right * np.cos(a) + up * np.sin(a)) * r
-    def tri(P, col): out.append((np.array(P), white, np.array(col, float) / 2, 2))
     for i, value in enumerate((speed_kmh / 200, rpm / 8000)):
-        c = np.array(meta[28 + i * 4:31 + i * 4]); r = meta[31 + i * 4] * .92
-        for k in range(16): tri((c + n * .001, at(c, r, k * 22.5 + 22.5, .001), at(c, r, k * 22.5, .001)), (232, 222, 190))
-        for k in range(9):
-            deg = 210 - k * 30; w = 1.2 if k % 2 else 2.2
-            tri((at(c, r * .97, deg - w, .002), at(c, r * .97, deg + w, .002), at(c, r * (.84 if k % 2 else .76), deg, .002)), (34, 30, 26))
+        c = np.array(meta[28 + i * 4:31 + i * 4]) + n * .003; r = meta[31 + i * 4]
         a = np.radians(210 - np.clip(value, 0, 1) * 240); d = right * np.cos(a) + up * np.sin(a); side = -right * np.sin(a) + up * np.cos(a)
-        h = c + n * .003; w = max(.003, r * .1)
-        tri((h - d * r * .2 + side * w, h + d * r * .9, h - d * r * .2 - side * w), (235, 96, 36))
+        w = max(.0022, r * .055)
+        out.append((np.array((c - d * r * .18 + side * w, c + d * r * .86, c - d * r * .18 - side * w)), white, paint / 2, 2))
     return out
 def render(path, out, yaw=0.0, pitch=-6.0, steer=0.0, W=320, H=240, fov=74, speed=90.0, rpm=4000.0):
     meta, atlas, tris = load(path)
@@ -63,7 +58,7 @@ def render(path, out, yaw=0.0, pitch=-6.0, steer=0.0, W=320, H=240, fov=74, spee
         if not ok.any(): continue
         u = ((l1 * UV[0, 0] / z[0] + l2 * UV[1, 0] / z[1] + l3 * UV[2, 0] / z[2]) * zz)[ins][ok]
         w = ((l1 * UV[0, 1] / z[0] + l2 * UV[1, 1] / z[1] + l3 * UV[2, 1] / z[2]) * zz)[ins][ok]
-        texel = atlas[np.clip(w, 0, 255).astype(int), np.clip(u, 0, 255).astype(int)]
+        S = atlas.shape[0]; texel = atlas[np.clip(w / 255 * (S - 1), 0, S - 1).astype(int), np.clip(u / 255 * (S - 1), 0, S - 1).astype(int)]
         img[yy[ok], xx[ok]] = np.clip(texel * col / 128 * shade, 0, 255); zb[yy[ok], xx[ok]] = zi[ok]
     bayer = np.array([[-4, 0, -3, 1], [2, -2, 3, -1], [-3, 1, -4, 0], [3, -1, 2, -2]])
     o = (np.clip(img + bayer[np.arange(H) % 4][:, np.arange(W) % 4][..., None], 0, 255).astype(np.uint8) >> 3) << 3
