@@ -156,20 +156,14 @@ def main():
         k = np.where(hit)[0][t[hit].argmin()]; n = np.cross(e1[k], e2[k]); n /= np.linalg.norm(n)
         if n[2] > 0: n = -n
         return pts[k] - d * .006, n
-    def painted_dials():
-        # Render what the driver sees of the cluster with the full-resolution
-        # texture, find the painted dials as circles on screen (OpenCV Hough),
-        # pick the matching pair, and cast rays back to the dash for 3D centres.
-        try:
-            import cv2
-        except ImportError:
-            return None
-        look = centre + np.array([0, radius * .5, .15]) - eye; look /= np.linalg.norm(look)
+    texf = np.asarray(src).astype(np.float32)
+    def view(target, fov, W, H):
+        """Driver's-eye render of the interior with the full-resolution texture."""
+        look = target - eye; look /= np.linalg.norm(look)
         right = np.cross(np.array([0, 1., 0]), look); right /= np.linalg.norm(right)
         if right[0] < 0: right = -right
         up = np.cross(look, right); up = up if up[1] > 0 else -up
-        W, H = 960, 640; foc = W / 2 / np.tan(np.radians(34) / 2)
-        texf = np.asarray(src).astype(np.float32); TH2, TW2 = texf.shape[:2]
+        foc = W / 2 / np.tan(np.radians(fov) / 2); TH2, TW2 = texf.shape[:2]
         img = np.zeros((H, W, 3), np.float32); zb = np.full((H, W), 1e9)
         for p in interior:
             P = frame(p['pos'], o.forward)
@@ -191,6 +185,39 @@ def main():
                 u = ((l1 * UV[0, 0] / z[0] + l2 * UV[1, 0] / z[1] + l3 * UV[2, 0] / z[2]) * zz)[ins][ok]
                 v = ((l1 * UV[0, 1] / z[0] + l2 * UV[1, 1] / z[1] + l3 * UV[2, 1] / z[2]) * zz)[ins][ok]
                 img[yy[ok], xx[ok]] = texf[((v % 1) * (TH2 - 1)).astype(int), ((u % 1) * (TW2 - 1)).astype(int)]; zb[yy[ok], xx[ok]] = zi[ok]
+        ray = lambda px, py: eye + look * foc + right * (px - W / 2) - up * (py - H / 2)
+        return img, look, foc, ray
+
+    def refine(cx3, r3, cv2):
+        """Zoom on one dial: exact dial circle, then the painted hub as pivot."""
+        Wz = 400; fov = 2 * np.degrees(np.arctan(r3 * 2.2 / np.linalg.norm(cx3 - eye)))
+        img, look, foc, ray = view(cx3, fov, Wz, Wz)
+        rp = r3 / ((cx3 - eye) @ look) * foc
+        g = cv2.GaussianBlur(cv2.cvtColor(img.clip(0, 255).astype(np.uint8), cv2.COLOR_RGB2GRAY), (5, 5), 1.2)
+        best = (Wz / 2, Wz / 2, rp)
+        found = cv2.HoughCircles(g, cv2.HOUGH_GRADIENT, dp=1, minDist=5, param1=80, param2=20, minRadius=int(rp * .45), maxRadius=int(rp * 1.05))
+        if found is not None:
+            C = found[0][np.hypot(found[0][:, 0] - Wz / 2, found[0][:, 1] - Wz / 2) < rp * .6]
+            if len(C): best = tuple(C[0])
+        px, py, pr = best
+        hub = cv2.HoughCircles(g, cv2.HOUGH_GRADIENT, dp=1, minDist=5, param1=80, param2=12, minRadius=max(3, int(pr * .05)), maxRadius=max(5, int(pr * .2)))
+        if hub is not None:
+            H_ = hub[0][np.hypot(hub[0][:, 0] - px, hub[0][:, 1] - py) < pr * .3]
+            if len(H_): px, py = H_[0][0], H_[0][1]
+        hit, hn = raycast(ray(px, py))
+        if hit is None: return cx3, r3
+        return hit, pr * ((hit - eye) @ look) / foc
+
+    def painted_dials():
+        # Find the painted dials as circles on a render of the driver's view
+        # (OpenCV Hough), pick the matching pair, cast rays back for 3D centres,
+        # then refine each on a zoomed render (dial circle, then painted hub).
+        try:
+            import cv2
+        except ImportError:
+            return None
+        W, H = 960, 640
+        img, look, foc, ray = view(centre + np.array([0, radius * .5, .15]), 34, W, H)
         g = cv2.GaussianBlur(cv2.cvtColor(img.clip(0, 255).astype(np.uint8), cv2.COLOR_RGB2GRAY), (5, 5), 1.2)
         found = cv2.HoughCircles(g, cv2.HOUGH_GRADIENT, dp=1.2, minDist=30, param1=80, param2=24, minRadius=14, maxRadius=110)
         if found is None: return None
@@ -204,15 +231,15 @@ def main():
         if best is None: return None
         out, normals = [], []
         for cx, cy, r in best[1:]:
-            d = look * foc + right * (cx - W / 2) - up * (cy - H / 2)
-            hit, hn = raycast(eye + d)
+            hit, hn = raycast(ray(cx, cy))
             if hit is None: return None
-            depth = (hit - eye) @ look
+            r3 = r * ((hit - eye) @ look) / foc
+            hit, r3 = refine(hit, r3, cv2)
             # Needle colour: the light paint of the dial (ticks and numerals).
             yy, xx = np.mgrid[int(max(0, cy - r)):int(min(H, cy + r)), int(max(0, cx - r)):int(min(W, cx + r))]
             ring = img[yy, xx][((xx - cx) ** 2 + (yy - cy) ** 2 < (r * .9) ** 2)]
             lum = ring.mean(1); paint = ring[lum >= np.percentile(lum, 97)].mean(0) if len(ring) else np.array([220, 210, 190])
-            out.append((hit[0], hit[1], hit[2], r * depth / foc * .95, paint)); normals.append(hn)
+            out.append((hit[0], hit[1], hit[2], r3 * .95, paint)); normals.append(hn)
         out.sort(key=lambda g: abs(g[0] - centre[0]))  # speedometer nearest the column
         return out, np.mean(normals, 0)
 
@@ -227,6 +254,15 @@ def main():
             hit, _ = raycast(np.array([x, y, surface_z(x, y, r)]))
             z = surface_z(x, y, r) - .006
             gauges.append((x, y, min(z, hit[2]) if hit is not None else z, r))
+        try:
+            import cv2
+            refined = []
+            for x, y, z, r in gauges:
+                h, r2 = refine(np.array([x, y, z]), r, cv2)
+                refined.append((h[0], h[1], min(h[2], z), r) if np.linalg.norm(h[:2] - [x, y]) < r * .5 else (x, y, z, r))
+            gauges = refined
+        except ImportError:
+            pass
     else:
         painted = painted_dials()
         gauges, normals = [], []
