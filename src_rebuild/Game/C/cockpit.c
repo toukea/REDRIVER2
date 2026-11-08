@@ -31,7 +31,7 @@ TextureID atlas=0;
 // Imported interiors, loaded once per file name from data/cockpits.
 struct ImportedCache { cockpit::Imported data; TextureID texture=0; bool tried=false; };
 std::map<std::string,ImportedCache> imported;
-struct GpuTri { cockpit::Vec a,b,c; unsigned char uv[6]; cockpit::Color color; bool luminous; };
+struct GpuTri { cockpit::Vec a,b,c; unsigned char uv[6]; cockpit::Color color; bool luminous; int bias; }; // bias: buckets nearer the eye
 std::vector<GpuTri> fixedImported, frameTris;
 std::string fixedName; cockpit::Placement fixedPlacement; bool fixedValid=false;
 bool usedBuckets[OTSIZE];int bucketCount=0;
@@ -71,7 +71,7 @@ void drawTris(const std::vector<GpuTri>& tris,const MATRIX& rotation,cockpit::Ve
             SVECTOR a={short(std::lround(v[0].position.x*8)),short(std::lround(v[0].position.y*8)),short(std::lround(v[0].position.z*8)),0};
             SVECTOR b={short(std::lround(v[1].position.x*8)),short(std::lround(v[1].position.y*8)),short(std::lround(v[1].position.z*8)),0};
             SVECTOR c={short(std::lround(v[2].position.x*8)),short(std::lround(v[2].position.y*8)),short(std::lround(v[2].position.z*8)),0};
-            int bucket=MAX(5,MIN(OTSIZE-1,int((v[0].position.z+v[1].position.z+v[2].position.z)/24)));
+            int bucket=MAX(5,MIN(OTSIZE-1,int((v[0].position.z+v[1].position.z+v[2].position.z)/24)-tri.bias));
             // Lists are prepended: bind -> cockpit triangles -> reset -> world.
             if(!usedBuckets[bucket]){
                 auto reset=(DR_PSYX_TEX*)current->primptr;SetPsyXTexture(reset,0,0,0);addPrim(current->ot+bucket,reset);
@@ -98,9 +98,9 @@ void appendProcedural(std::vector<GpuTri>& out,const cockpit::Mesh& mesh) {
     }
 }
 // With an imported atlas, procedural parts (driver arms) use its white strip.
-void appendFlat(std::vector<GpuTri>& out,const cockpit::Mesh& mesh,bool lit=false) {
+void appendFlat(std::vector<GpuTri>& out,const cockpit::Mesh& mesh,bool lit=false,int bias=0) {
     for(const auto& t:mesh.triangles){
-        GpuTri g{t.a,t.b,t.c,{128,252,129,252,128,253},{(unsigned char)(t.color.r/2),(unsigned char)(t.color.g/2),(unsigned char)(t.color.b/2)},lit};
+        GpuTri g{t.a,t.b,t.c,{128,252,129,252,128,253},{(unsigned char)(t.color.r/2),(unsigned char)(t.color.g/2),(unsigned char)(t.color.b/2)},lit,bias};
         out.push_back(g);
     }
 }
@@ -218,7 +218,7 @@ void Cockpit_Draw(int view) {
         appendFlat(frameTris,movingMesh);
         cockpit::Mesh dials;
         cockpit::needles(dials,in->data,pl,std::fabs(car->hd.wheel_speed/4096.f*.3f)*3.6f,rpm);
-        appendFlat(frameTris,dials,true);
+        appendFlat(frameTris,dials,true,2);  // in front of the dial faces even without a Z-buffer
         drawTris(fixedImported,rotation,translation);drawTris(frameTris,rotation,translation);
     } else {
         cockpit::controls(movingMesh,p,angle,std::fabs(car->hd.wheel_speed/4096.f*.3f)*3.6f,rpm,showDriver);

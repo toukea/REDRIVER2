@@ -125,21 +125,57 @@ def main():
                 if best is None or score > best[0]: best = (score, ux, uy, r, inl)
             if best is None or best[0] < 10: break
             dials.append((best[1], best[2], best[3])); q = q[~best[4]]
-    def surface_z(x, y):
-        # Instrument faces sit well beyond the column shroud and the hub.
-        far = cand[cand[:, 2] > centre[2] + .12] if len(cand) else cand
+    every_face = []  # all driver-facing interior surfaces beyond the hub (lens, hood, faces)
+    for p in interior:
+        P = frame(p['pos'], o.forward)
+        for f in p['idx']:
+            T = P[f[FLIP]]; n = np.cross(T[1] - T[0], T[2] - T[0]); ln = np.linalg.norm(n)
+            if ln and n[2] / ln < -.2: every_face.append(T)
+    every_face = np.concatenate(every_face) if every_face else np.zeros((0, 3))
+    def surface_z(x, y, r=.035):
+        # Needles must lie in front of whatever the driver sees over the dial
+        # (cluster lens or hood included): nearest surface overlapping the dial.
+        far = every_face[every_face[:, 2] > centre[2] + .08]
+        near = far[np.hypot(far[:, 0] - x, far[:, 1] - y) < r * .9] if len(far) else far
+        if len(near): return near[:, 2].min()
         d = np.hypot(far[:, 0] - x, far[:, 1] - y) if len(far) else np.array([])
         return far[d.argmin(), 2] if len(d) else centre[2] + .2
+    # Ray cast from the driver's eye: the first interior surface hit beyond the
+    # wheel is what the driver actually sees (lens, hood or dial face).
+    TV = np.array([P[f[FLIP]] for p in interior for P in [frame(p['pos'], o.forward)] for f in p['idx']])
+    def raycast(target):
+        d = target - eye; d = d / np.linalg.norm(d)
+        e1 = TV[:, 1] - TV[:, 0]; e2 = TV[:, 2] - TV[:, 0]; pv = np.cross(d, e2); det = (e1 * pv).sum(1)
+        ok = np.abs(det) > 1e-9; inv = np.where(ok, 1 / np.where(ok, det, 1), 0)
+        tv = eye - TV[:, 0]; u = (tv * pv).sum(1) * inv; qv = np.cross(tv, e1); v = (qv @ d) * inv; t = (e2 * qv).sum(1) * inv
+        hit = ok & (u >= 0) & (v >= 0) & (u + v <= 1) & (t > 0)
+        pts = eye + np.outer(t, d); hit &= pts[:, 2] > centre[2] + .10  # beyond hub and column
+        if not hit.any(): return None, None
+        k = np.where(hit)[0][t[hit].argmin()]; n = np.cross(e1[k], e2[k]); n /= np.linalg.norm(n)
+        if n[2] > 0: n = -n
+        return pts[k] - d * .006, n
     dials.sort(key=lambda d: -d[2]); real = len(dials) >= 2
     if real:
         big = [d for d in dials if d[2] > dials[0][2] * .85][:2]
         if len(big) < 2: big = dials[:2]
         big.sort(key=lambda d: abs(d[0] - centre[0]))  # speedometer nearest the column
-        gauges = [(x, y, surface_z(x, y) - .004, r) for x, y, r in big]
+        gauges = []
+        for x, y, r in big:
+            hit, _ = raycast(np.array([x, y, surface_z(x, y, r)]))
+            z = surface_z(x, y, r) - .006
+            gauges.append((x, y, min(z, hit[2]) if hit is not None else z, r))
     else:
-        gy = centre[1] + radius * .45
-        gz = min(surface_z(centre[0] + dx, gy) for dx in (-.07, .07)) - .004  # nearest visible face
-        gauges = [(centre[0] + dx, gy, gz, .035) for dx in (-.07, .07)]
+        # Virtual pair seen through the upper half of the wheel, either side of the column.
+        gauges, normals = [], []
+        for dx in (-.065, .065):
+            hit, hn = raycast(centre + np.array([dx, radius * .62, 0]))
+            if hit is not None: gauges.append((hit[0], hit[1], hit[2], .04)); normals.append(hn)
+        if len(gauges) < 2:
+            gz = min(surface_z(centre[0] + dx, centre[1] + radius * .45) for dx in (-.07, .07)) - .006
+            gauges = [(centre[0] + dx, centre[1] + radius * .45, gz, .034) for dx in (-.07, .07)]
+        else:  # one shared dial plane, at the nearer of the two hits
+            z = min(g[2] for g in gauges); gauges = [(g[0], g[1], z, g[3]) for g in gauges]
+            cand_n = np.array(normals)
     dial_n = cand_n.mean(0) if len(cand_n) else np.array([0, .3, -.95]); dial_n /= np.linalg.norm(dial_n)
 
     def visible(P):

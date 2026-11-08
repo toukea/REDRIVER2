@@ -82,21 +82,27 @@ inline void applyImported(Profile& p, const Imported& m, const Placement& pl, fl
     p.floor=seat.y-30;  // the procedural hips sit 30 units above "floor"
     p.eye={wheel.x, std::min(seat.y+seated,p.roof-.10f*pl.scale), seat.z-.07f*pl.scale};
 }
-// Live instrument needles over the imported dial faces: 240 degree sweep, same
-// scale as the code-generated cluster (200 km/h, 8000 rpm). Driver units.
+// Live instruments over the imported cluster. The source textures are too small
+// to read at PSX resolution, so each dial gets a bright face, 30-degree ticks, a
+// long needle and a hub: 240 degree sweep, 200 km/h and 8000 rpm. Driver units.
 inline void needles(Mesh& m, const Imported& in, const Placement& pl, float speedKmh, float rpm) {
     if(!in.hasDials) return;
     Vec n=in.dialNormal, up=unit(Vec(0,1,0)-n*n.y), right=unit(cross(up,n));
     if(right.x<0) right=right*-1;
     const float values[2]={speedKmh/200, rpm/8000};
+    const Color face={232,222,190}, ink={34,30,26}, red={235,96,36};
     m.material=Solid;
+    auto at=[&](Vec c,float r,float deg,float lift){ float a=deg*pi/180; return mapPoint(pl,c+n*lift+(right*std::cos(a)+up*std::sin(a))*r); };
     for(int i=0;i<2;++i){
-        const auto& d=in.dials[i];
-        float a=(210-bound(values[i],0,1)*240)*pi/180;
-        Vec c=d.centre+n*.006f, dir=right*std::cos(a)+up*std::sin(a), side=right*-std::sin(a)+up*std::cos(a);
-        Vec tip=c+dir*(d.radius*.78f), tail=c-dir*(d.radius*.18f);
-        m.tri(mapPoint(pl,tail+side*(d.radius*.05f)),mapPoint(pl,tip),mapPoint(pl,tail-side*(d.radius*.05f)),{235,125,59});
-        m.tri(mapPoint(pl,c+n*.001f+side*(d.radius*.09f)),mapPoint(pl,c+n*.001f+dir*(d.radius*.09f)),mapPoint(pl,c+n*.001f-side*(d.radius*.09f)),{40,38,34});
+        const auto& d=in.dials[i]; float r=d.radius*.92f; Vec c=d.centre;
+        for(int k=0;k<16;++k) m.tri(mapPoint(pl,c+n*.001f),at(c,r,k*22.5f+22.5f,.001f),at(c,r,k*22.5f,.001f),face);
+        for(int k=0;k<=8;++k){ float deg=210-k*30.f, w=k%2?1.2f:2.2f;
+            m.tri(at(c,r*.97f,deg-w,.002f),at(c,r*.97f,deg+w,.002f),at(c,r*(k%2?.84f:.76f),deg,.002f),ink); }
+        float deg=210-bound(values[i],0,1)*240, a=deg*pi/180;
+        Vec dir=right*std::cos(a)+up*std::sin(a), side=right*-std::sin(a)+up*std::cos(a), h=c+n*.003f;
+        float w=std::max(.003f,r*.1f);
+        m.tri(mapPoint(pl,h-dir*(r*.2f)+side*w),mapPoint(pl,h+dir*(r*.9f)),mapPoint(pl,h-dir*(r*.2f)-side*w),red);
+        for(int k=0;k<6;++k) m.tri(mapPoint(pl,h+n*.001f),at(c,w*1.8f,k*60.f+60,.004f),at(c,w*1.8f,k*60.f,.004f),ink);
     }
 }
 // Steering rotation about the column, matching wheelPoint(): positive command is

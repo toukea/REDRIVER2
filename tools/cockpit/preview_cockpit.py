@@ -13,8 +13,30 @@ def load(path):
         v = np.array(struct.unpack_from('<9f', b, p)).reshape(3, 3); e = b[p + 36:p + 46]; p += 46
         e = np.frombuffer(e, np.uint8); tris.append((v, e[:6].reshape(3, 2).astype(float), e[6:9].astype(float), int(e[9])))
     return meta, atlas, tris
-def render(path, out, yaw=0.0, pitch=-6.0, steer=0.0, W=320, H=240, fov=74):
+def needles(meta, speed_kmh, rpm):
+    # Same construction as cockpit::needles() in src_rebuild/utils/cockpit_import.h.
+    if len(meta) < 40 or meta[31] <= .01: return []
+    n = np.array(meta[36:39]); n /= np.linalg.norm(n)
+    up = np.array([0, 1., 0]) - n * n[1]; up /= np.linalg.norm(up)
+    right = np.cross(up, n); right /= np.linalg.norm(right)
+    if right[0] < 0: right = -right
+    white = np.array([[128, 252], [129, 252], [128, 253]], float); out = []
+    def at(c, r, deg, lift):
+        a = np.radians(deg); return c + n * lift + (right * np.cos(a) + up * np.sin(a)) * r
+    def tri(P, col): out.append((np.array(P), white, np.array(col, float) / 2, 2))
+    for i, value in enumerate((speed_kmh / 200, rpm / 8000)):
+        c = np.array(meta[28 + i * 4:31 + i * 4]); r = meta[31 + i * 4] * .92
+        for k in range(16): tri((c + n * .001, at(c, r, k * 22.5 + 22.5, .001), at(c, r, k * 22.5, .001)), (232, 222, 190))
+        for k in range(9):
+            deg = 210 - k * 30; w = 1.2 if k % 2 else 2.2
+            tri((at(c, r * .97, deg - w, .002), at(c, r * .97, deg + w, .002), at(c, r * (.84 if k % 2 else .76), deg, .002)), (34, 30, 26))
+        a = np.radians(210 - np.clip(value, 0, 1) * 240); d = right * np.cos(a) + up * np.sin(a); side = -right * np.sin(a) + up * np.cos(a)
+        h = c + n * .003; w = max(.003, r * .1)
+        tri((h - d * r * .2 + side * w, h + d * r * .9, h - d * r * .2 - side * w), (235, 96, 36))
+    return out
+def render(path, out, yaw=0.0, pitch=-6.0, steer=0.0, W=320, H=240, fov=74, speed=90.0, rpm=4000.0):
     meta, atlas, tris = load(path)
+    tris = tris + needles(meta, speed, rpm)
     eye = np.array(meta[18:21]); f = W / 2 / np.tan(np.radians(fov) / 2)
     cy, sy = np.cos(np.radians(yaw)), np.sin(np.radians(yaw)); cp, sp = np.cos(np.radians(pitch)), np.sin(np.radians(pitch))
     img = np.zeros((H, W, 3), np.float32); img[:] = (120, 150, 185); zb = np.full((H, W), 1e9)

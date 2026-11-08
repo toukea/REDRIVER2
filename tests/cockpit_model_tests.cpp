@@ -89,10 +89,12 @@ int main(){
             Imported v;check(loadImported(path,v) && v.hasDials && v.realDials,"version 2 instrument dials load");
             Placement pl2;pl2.scale=100;
             Mesh idle,fast;needles(idle,v,pl2,0,800);needles(fast,v,pl2,180,7000);
-            check(idle.triangles.size()==4 && fast.triangles.size()==4,"two needles with hubs");
+            auto needle=[](const Mesh& m){for(const auto& t:m.triangles)if(t.color.r==235 && t.color.g==96)return t;return m.triangles[0];};
+            check(idle.triangles.size()==fast.triangles.size() && idle.triangles.size()>=60,"two lit dials: faces, ticks, needles, hubs");
             Vec c0=mapPoint(pl2,v.dials[0].centre);
-            check(idle.triangles[0].b.x<c0.x && fast.triangles[0].b.x>c0.x,"speedometer needle sweeps clockwise with speed");
-            check(std::fabs(length(idle.triangles[0].b-c0)-v.dials[0].radius*.78f*100)<1.5f,"needle stays within the dial");
+            check(needle(idle).b.x<c0.x && needle(fast).b.x>c0.x,"speedometer needle sweeps clockwise with speed");
+            check(length(needle(idle).b-c0)<v.dials[0].radius*100 && length(needle(idle).b-c0)>v.dials[0].radius*70,"needle stays within the dial");
+            check(dot(needle(idle).b-c0,cross(Vec(0,1,0),Vec(1,0,0)))*0+length(needle(idle).b-needle(idle).a)>1,"needle has a visible length");
             std::remove(path);
         }
         Imported real;if(loadImported("data/cockpits/duke69.rdc",real))check(real.tris.size()>1500 && real.radius>.1f && real.hasDials && real.realDials,"bundled Duke interior has its dials");
