@@ -46,7 +46,9 @@ Compiler avec `./build-wheel.ps1`, puis utiliser `start-wheel-game.cmd`. En cond
 
 La vue utilise une géométrie 3D originale et un atlas de textures pixel de 256×256, générés par le code. Le style reste celui d'un habitacle ancien à faible nombre de polygones : tableau de bord rembourré, casquette d'instruments, aiguilles vitesse/régime, radio analogique, aérateurs, garniture bois sur les voitures, vinyle sur les camions, sièges en tissu, panneaux de portes et poignées. Les bras sont des volumes effilés, avec paumes, pouces et doigts simplifiés. Le volant est plus fin et plus éloigné pour dégager la route. La lumière ambiante varie avec le jour/la nuit ; les faces des cadrans restent éclairées. Les deux petits instruments et la radio sont décoratifs ; les aiguilles principales utilisent les données de conduite, avec une conversion de vitesse approximative héritée du pont G29. Aucun modèle ou animation d'Assetto Corsa ou de Sketchfab n'a été copié.
 
-Le fichier fourni active `start_in_cockpit=1` : une nouvelle conduite démarre directement dans cette vue. Mettre 0 pour commencer en poursuite. Le cycle avec C reste disponible.
+La dernière vue choisie avec C est sauvegardée immédiatement dans `data/camera-view.cfg` et restaurée aux prochaines parties, même après fermeture du jeu. Chaque joueur dispose d'un choix en voiture et d'un choix à pied. Les cinématiques et replays ne modifient pas ces préférences ; sortir d'une voiture puis en reprendre une restaure la vue de conduite. Si le cockpit est désactivé, la première personne sert de repli sans effacer le choix cockpit. Le fichier local est ignoré par Git ; le supprimer rétablit les valeurs initiales.
+
+`start_in_cockpit=1` sert désormais uniquement de valeur initiale en l'absence de préférence mémorisée. Mettre 0 pour commencer en poursuite lors du premier lancement. Le cycle avec C reste disponible.
 
 ## Les trois familles
 
@@ -65,7 +67,7 @@ Avec `fit_model=1`, la position est affinée à partir des sommets du modèle ex
 | `[cockpit] enabled=1` | Inclure la nouvelle vue dans le cycle ; 0 conserve les vues historiques |
 | `[cockpit] driver=1` | Afficher le corps et les mains ; 0 les masque |
 | `[cockpit] pitch=3` | Inclinaison initiale du regard, en degrés vers le bas |
-| `[cockpit] start_in_cockpit=1` | Commencer une nouvelle conduite dans le cockpit |
+| `[cockpit] start_in_cockpit=1` | Vue initiale cockpit tant qu'aucun choix utilisateur n'est mémorisé |
 | `fit_model=1` | Utiliser la silhouette du modèle chargé ; réglage global ou par modèle |
 | `family` | Famille d'habitacle, 0/1/2 |
 | `half_width`, `half_height`, `half_length` | Gabarit de départ avant calcul du profil |

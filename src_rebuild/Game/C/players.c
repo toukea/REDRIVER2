@@ -53,8 +53,8 @@ void InitPlayer(PLAYER *locPlayer, CAR_DATA *cp, char carCtrlType, int direction
 		locPlayer->worldCentreCarId = cp->id;
 		locPlayer->cameraView = 0;// (NumPlayers == 2) << 1; // [A]
 #ifndef PSX
-		if (carCtrlType == CONTROL_TYPE_PLAYER && Cockpit_StartInside())
-			locPlayer->cameraView = CAMERA_VIEW_COCKPIT;
+		if (carCtrlType == CONTROL_TYPE_PLAYER)
+			locPlayer->cameraView = Camera_PreferredView(playerId, false);
 #endif
 		locPlayer->playerCarId = cp->id;
 		locPlayer->playerType = PLAYER_TYPE_CAR;
@@ -76,6 +76,10 @@ void InitPlayer(PLAYER *locPlayer, CAR_DATA *cp, char carCtrlType, int direction
 		locPlayer->playerCarId = -1;
 		locPlayer->car_is_sounding = 2;
 		locPlayer->cameraView = 0;
+#ifndef PSX
+		if (carCtrlType == CONTROL_TYPE_PLAYER)
+			locPlayer->cameraView = Camera_PreferredView(playerId, true);
+#endif
 		
 		locPlayer->pos[1] = -pPlayerPed->position.vy;
 	}
@@ -109,6 +113,10 @@ void ChangeCarPlayerToPed(int playerID)
 	//my_sly_var = playerID;
 	locPlayer->headTimer = 0;
 	locPlayer->cameraView = 0;
+#ifndef PSX
+	if (!NoPlayerControl && !gInGameCutsceneActive)
+		locPlayer->cameraView = Camera_PreferredView(playerID, true);
+#endif
 	locPlayer->cameraAngle = (NoPlayerControl == 0) ? (lcp->hd.direction + 1536) : 4096;
 	locPlayer->headTimer = 0;
 	locPlayer->playerType = 2;
@@ -196,6 +204,10 @@ void ChangePedPlayerToCar(int playerID, CAR_DATA *newCar)
 	}
 
 	lPlayer->cameraView = lastCarCameraView;
+#ifndef PSX
+	if (!NoPlayerControl && !gInGameCutsceneActive)
+		lPlayer->cameraView = Camera_PreferredView(playerID, false);
+#endif
 
 	if (NoPlayerControl == 0)
 		lPlayer->cameraAngle = newCar->hd.direction + 1536;

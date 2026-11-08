@@ -1,6 +1,7 @@
 #include "../src_rebuild/utils/cockpit_model.h"
 #include "../src_rebuild/utils/cockpit_atlas.h"
 #include "../src_rebuild/utils/cockpit_import.h"
+#include "../src_rebuild/utils/camera_preference.h"
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -8,6 +9,29 @@ int checks=0;
 void check(bool ok,const char* message){++checks;if(!ok){std::fprintf(stderr,"FAIL: %s\n",message);std::exit(1);}}
 int main(){
     using namespace cockpit;
+    {
+        const char* path="src_rebuild/bin/tests/camera-preference-test.cfg";
+        std::remove(path);
+        camera_preference::Preferences p;
+        check(!p.load(path),"missing preference file uses defaults");
+        check(p.resolve(0,false,true,3)==3,"first launch honors cockpit default");
+        check(p.choose(0,false,2),"explicit first person choice");
+        check(p.choose(0,true,1),"separate pedestrian choice");
+        check(p.choose(1,false,0),"separate second player choice");
+        check(!p.choose(0,false,6) && !p.choose(0,true,3),"scripted and pedestrian cockpit views rejected");
+        check(p.save(path),"save preference to disk");
+        camera_preference::Preferences restarted;
+        check(restarted.load(path),"reload preference after restart");
+        check(restarted.resolve(0,false,true,3)==2 && restarted.resolve(0,true,true,0)==1 && restarted.resolve(1,false,true,3)==0,"restart preserves each explicit choice");
+        check(restarted.choose(0,false,3),"switch back to cockpit explicitly");
+        check(restarted.resolve(0,false,false,0)==2 && restarted.resolve(0,false,true,0)==3,"disabled cockpit fallback preserves saved cockpit choice");
+        check(!restarted.choose(0,false,3),"unchanged view does not trigger another write");
+        FILE* bad=std::fopen(path,"wb");check(bad!=nullptr,"create invalid preference fixture");
+        std::fputs("REDRIVER2_CAMERA_V1\n99 3\n-1 -1\n",bad);std::fclose(bad);
+        camera_preference::Preferences invalid;invalid.load(path);
+        check(invalid.resolve(0,false,true,0)==0 && invalid.resolve(0,true,true,0)==0,"invalid stored view safely falls back");
+        std::remove(path);
+    }
     for(int f=0;f<3;++f){
         auto p=profile(Family(f),100,100,250);
         check(p.eye.y<p.roof && p.eye.y>p.floor && p.eye.z<p.front,"eye inside cabin");

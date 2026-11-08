@@ -2,6 +2,8 @@
 
 ## Extension cockpit — 8 novembre 2026
 
+Persistance caméra : `utils/camera_preference.h`, intégration dans `camera.c` (uniquement changement explicite) et `players.c` (départ et transitions piéton/voiture). `data/camera-view.cfg` local ignoré par Git : deux joueurs, préférences voiture/à pied séparées. `start_in_cockpit` ne sert plus que de défaut avant premier choix. Ne pas enregistrer les vues imposées par les cinématiques/replays ni les replis temporaires.
+
 Habitacles importés : `utils/cockpit_import.h` (format `.rdc`), `tools/cockpit/` (glTF → `.rdc`, aperçu). Fichiers et crédits dans `data/cockpits/` (CC-BY-4.0, publiés à la demande de l'utilisateur). Voir la section correspondante de COCKPIT_SUPPORT.md. Conserver la direction artistique PSX : atlas 256, quelques milliers de triangles par habitacle (la file de primitives est partagée avec le décor).
 
 Une branche distincte `wheel-controller-cockpit`, issue de `wheel-controller-ffb`, ajoute une vue cockpit optionnelle sans remplacer la première personne existante. Voir [COCKPIT_SUPPORT.md](../COCKPIT_SUPPORT.md) pour les réglages, le rendu, l'inspiration AC1 et les limites de validation. Les trois familles sont deux places, quatre places et cabine camion (bus assimilés provisoirement). Le classement automatique par dimensions reste à corriger au cas par cas avec `data/cockpit.ini`.

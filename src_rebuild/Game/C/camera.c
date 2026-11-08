@@ -20,6 +20,24 @@
 #include "map.h"
 #ifndef PSX
 #include "cockpit.h"
+#include "../../utils/camera_preference.h"
+
+static camera_preference::Preferences& CameraPreferences()
+{
+	static camera_preference::Preferences preferences;
+	static bool loaded = false;
+	if (!loaded) {
+		preferences.load("camera-view.cfg");
+		loaded = true;
+	}
+	return preferences;
+}
+
+int Camera_PreferredView(int playerId, bool onFoot)
+{
+	return CameraPreferences().resolve(playerId, onFoot, Cockpit_Enabled(),
+		!onFoot && Cockpit_StartInside() ? CAMERA_VIEW_COCKPIT : 0);
+}
 #endif
 #include "pedest.h"
 #include "cell.h"
@@ -233,6 +251,12 @@ void ModifyCamera(void)
 #endif
 				lp->cameraView = next;
 				lp->viewChange = FrameCnt;
+#ifndef PSX
+				if (!gInGameCutsceneActive && lp->playerType != PLAYER_TYPE_NONE &&
+					CameraPreferences().choose(i, lp->playerType == PLAYER_TYPE_PEDESTRIAN, next) &&
+					!CameraPreferences().save("camera-view.cfg"))
+					printError("Could not save camera preference to camera-view.cfg\n");
+#endif
 			}
 
 			if (lp->cameraView == 1)

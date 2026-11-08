@@ -3,6 +3,9 @@
 
 #define CAMERA_COLLIDER_CARID (MAX_CARS+1)
 #define CAMERA_VIEW_COCKPIT 3
+#ifndef PSX
+int Camera_PreferredView(int playerId, bool onFoot);
+#endif
 
 inline bool CameraViewIsInside(int view)
 {

@@ -49,3 +49,4 @@ data/ffb_telemetry.csv
 build-wheel.log
 data/cockpits/*_atlas.png
 __pycache__/
+data/camera-view.cfg
