@@ -196,7 +196,7 @@ void setCamera(PLAYBACKCAMERA* Change)
 
 	tracking_car = (Change->cameraview & 8) >> 3;
 
-	if(cameraview != 0 && cameraview != 2)
+	if(cameraview != 0 && !CameraViewIsInside(cameraview))
 	{
 		MainPlayer.cameraPos.vx = Change->position.vx;
 		MainPlayer.cameraPos.vy = Change->position.vy;
@@ -435,7 +435,7 @@ void SetPlaybackCamera(PLAYBACKCAMERA* camera)
 
 	CameraChanged = 1;
 
-	if(cameraview != 0 && cameraview != 2)
+	if(cameraview != 0 && !CameraViewIsInside(cameraview))
 	{
 		MainPlayer.cameraPos.vx = camera->position.vx;
 		MainPlayer.cameraPos.vy = camera->position.vy;
@@ -662,6 +662,7 @@ void CameraBar(int CameraCnt)
 				blue = 0;
 				break;
 			}
+			case CAMERA_VIEW_COCKPIT:
 			case 2:
 			{
 				red = 70;
@@ -2187,7 +2188,7 @@ int InvalidCamera(int car_num)
 		return 0;
 	
 	// check if camera is not too far
-	if (cameraview != 2)
+	if (!CameraViewIsInside(cameraview))
 	{
 		if (Long2DDistance(MainPlayer.spoolXZ, &MainPlayer.cameraPos) > 20000)
 		{

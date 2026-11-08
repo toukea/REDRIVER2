@@ -18,6 +18,9 @@
 #include "cell.h"
 #include "models.h"
 #include "map.h"
+#ifndef PSX
+#include "cockpit.h"
+#endif
 #include "pedest.h"
 #include "cell.h"
 
@@ -127,6 +130,11 @@ void InitCamera(PLAYER *lp)
 
 		CalcCameraBasePos(lp);
 
+#ifndef PSX
+		if (lp->cameraView == CAMERA_VIEW_COCKPIT && (lp->cameraCarId < 0 || !Cockpit_Enabled()))
+			lp->cameraView = 2;
+#endif
+
 		if (lp->cameraView == 0)
 		{
 			if (FrameCnt == 0) 
@@ -152,7 +160,7 @@ void InitCamera(PLAYER *lp)
 
 			PlaceCameraAtLocation(lp, 1);
 		}
-		else if (lp->cameraView == 2)
+		else if (CameraViewIsInside(lp->cameraView))
 		{
 			PlaceCameraInCar(lp, 0);
 		}
@@ -200,12 +208,7 @@ void InitCamera(PLAYER *lp)
 void ModifyCamera(void)
 {
 	// camera types which can be chosen during game
-	static char inGameCamera[4] = {
-		1,0,2,1
-	};
-
 	PLAYER *lp;
-	char *pNextCameraView;
 	int angle;
 	int length;
 
@@ -223,15 +226,12 @@ void ModifyCamera(void)
 			// [A] if only new button is pressed
 			if (lp->viewChange != FrameCnt-1 && (Pads[i].mapnew & 0x100))
 			{
-				pNextCameraView = inGameCamera;
-
-				while (*pNextCameraView++ != lp->cameraView)
-				{
-					if (pNextCameraView > inGameCamera + 2)
-						break;
-				}
-			
-				lp->cameraView = *pNextCameraView;
+				int next = lp->cameraView == 1 ? 0 : lp->cameraView == 0 ? 2 : 1;
+#ifndef PSX
+				if (lp->cameraView == 2 && lp->cameraCarId >= 0 && Cockpit_Enabled())
+					next = CAMERA_VIEW_COCKPIT;
+#endif
+				lp->cameraView = next;
 				lp->viewChange = FrameCnt;
 			}
 
@@ -598,18 +598,32 @@ void PlaceCameraInCar(PLAYER *lp, int BumperCam)
 		// build custom matrix using car draw matrix
 		InvertMatrix(&cp->hd.drawCarMat, &inv_camera_matrix);
 
-		viewer_position.vy = -40;
-
-		if (!((paddCamera & CAMERA_PAD_LOOK_BACK) == CAMERA_PAD_LOOK_BACK || (paddCamera & CAMERA_PAD_LOOK_BACK_DED)))
+#ifndef PSX
+		if (lp->cameraView == CAMERA_VIEW_COCKPIT)
 		{
-			viewer_position.vz -= cp->ap.carCos->colBox.vz - 250;
-
-			// rotate vector on vehicle
+			Cockpit_EyeOffset(cp, &viewer_position);
 			SetRotMatrix(&cp->hd.drawCarMat);
 			_MatrixRotate(&viewer_position);
+			bool back = (paddCamera & CAMERA_PAD_LOOK_BACK) == CAMERA_PAD_LOOK_BACK || (paddCamera & CAMERA_PAD_LOOK_BACK_DED);
+			_RotMatrixY(&inv_camera_matrix, back ? 0 : 2048 + (lp->headPos >> 16));
+			_RotMatrixX(&inv_camera_matrix, Cockpit_ViewPitch());
+		}
+		else
+#endif
+		{
+			viewer_position.vy = -40;
 
-			// rotate head
-			_RotMatrixY(&inv_camera_matrix, 2048 + (lp->headPos >> 16));
+			if (!((paddCamera & CAMERA_PAD_LOOK_BACK) == CAMERA_PAD_LOOK_BACK || (paddCamera & CAMERA_PAD_LOOK_BACK_DED)))
+			{
+				viewer_position.vz -= cp->ap.carCos->colBox.vz - 250;
+
+				// rotate vector on vehicle
+				SetRotMatrix(&cp->hd.drawCarMat);
+				_MatrixRotate(&viewer_position);
+
+				// rotate head
+				_RotMatrixY(&inv_camera_matrix, 2048 + (lp->headPos >> 16));
+			}
 		}
 
 		MulMatrix0(&aspect, &inv_camera_matrix, &inv_camera_matrix);

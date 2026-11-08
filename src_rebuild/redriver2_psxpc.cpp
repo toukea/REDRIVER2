@@ -25,6 +25,7 @@
 
 #include "utils/ini.h"
 #include "utils/wheel.h"
+#include "Game/C/cockpit.h"
 #include <string>
 #ifdef _WIN32
 #include <direct.h>
@@ -692,6 +693,7 @@ int main(int argc, char** argv)
 	}
 	PsyX_Initialise("REDRIVER2", fullScreen ? screenWidth : windowWidth, fullScreen ? screenHeight : windowHeight, fullScreen);
 	Wheel_Init();
+	Cockpit_LoadConfig();
 
 	char version_info[32];
 	GetTimeStamp(version_info);

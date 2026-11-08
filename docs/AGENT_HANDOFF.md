@@ -1,5 +1,11 @@
 # Reprise technique et contexte — support sim racing
 
+## Extension cockpit — 8 novembre 2026
+
+Une branche distincte `wheel-controller-cockpit`, issue de `wheel-controller-ffb`, ajoute une vue cockpit optionnelle sans remplacer la première personne existante. Voir [COCKPIT_SUPPORT.md](../COCKPIT_SUPPORT.md) pour les réglages, le rendu, l'inspiration AC1 et les limites de validation. Les trois familles sont deux places, quatre places et cabine camion (bus assimilés provisoirement). Le classement automatique par dimensions reste à corriger au cas par cas avec `data/cockpit.ini`.
+
+Le champ réservé des frames `.wheel` v2 contient maintenant l'angle visuel du volant en dixièmes de degré lorsque le bit 32 est présent ; la taille reste 28 octets et les anciens v2 restent lisibles. Le cockpit a été observé à Chicago, mais la validation de tous les modèles, des grandes rotations et du replay en conduite n'est pas acquise. OpenXR reste un chantier distinct. Préserver la calibration utilisateur `data/wheel.ini` et les fichiers non suivis préexistants.
+
 État documenté le 7 novembre 2026. Ce fichier vise un agent qui ne dispose pas de l'historique de conversation. Les références de code ci-dessous sont relatives à la racine du dépôt.
 
 ## Objectif utilisateur et périmètre

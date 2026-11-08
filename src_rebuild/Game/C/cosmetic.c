@@ -7,6 +7,7 @@
 #include "debris.h"
 #include "pause.h"
 #include "camera.h"
+#include "players.h"
 #include "director.h"
 #include "main.h"
 
@@ -358,7 +359,7 @@ void AddCopCarLight(CAR_DATA *cp)
 
 	coplife = &cp->ap.coplife;
 
-	if (CameraCar == CAR_INDEX(cp) && cameraview == 2)
+	if (CameraCar == CAR_INDEX(cp) && CameraViewIsInside(player[CurrentPlayerView].cameraView))
 		return;
 
 	if (FastForward != 0) 

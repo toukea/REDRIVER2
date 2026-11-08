@@ -1419,7 +1419,7 @@ void DrawCar(CAR_DATA* cp, int view)
 	model = cp->ap.model;
 
 	// draw car lights in for InCar camera
-	if (player[view].cameraView == 2 && cp->id == player[view].cameraCarId)
+	if (CameraViewIsInside(player[view].cameraView) && cp->id == player[view].cameraCarId)
 	{
 		if (cp->ap.damage[0] < 500)
 			LeftLight = 2;

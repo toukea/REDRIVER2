@@ -9,6 +9,7 @@ float Wheel_GameBrake(const CAR_DATA* car);
 float Wheel_GameHandbrake(const CAR_DATA* car);
 int Wheel_GameGear(const CAR_DATA* car);
 int Wheel_GameRPM(const CAR_DATA* car);
+float Wheel_GameSteeringDegrees(const CAR_DATA* car);
 // slide: lateral slip, +-12500 at the friction limit. load: front grip relative
 // to the car's coasting value, 4096 = nominal. locked: wheel skidding.
 void Wheel_GameContact(CAR_DATA* car,int wheel,int slide,int load,int locked,int bump,int surface);

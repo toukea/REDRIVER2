@@ -2,6 +2,16 @@
 #define CAMERA_H
 
 #define CAMERA_COLLIDER_CARID (MAX_CARS+1)
+#define CAMERA_VIEW_COCKPIT 3
+
+inline bool CameraViewIsInside(int view)
+{
+#ifndef PSX
+	return view == 2 || view == CAMERA_VIEW_COCKPIT;
+#else
+	return view == 2;
+#endif
+}
 
 #ifdef PSX
 #define VIEW_DRAW_DISTANCE 16000

@@ -1642,7 +1642,7 @@ void SoundTasks(void)
 		cp = lcp->playerCarId > -1 ? &car_data[lcp->playerCarId] : NULL;
 
 		// doppler camera velocity
-		if (cp && (lcp->cameraView == 2 || lcp->cameraView == 0))
+		if (cp && (CameraViewIsInside(lcp->cameraView) || lcp->cameraView == 0))
 		{
 			lcp->camera_vel[0] = cp->st.n.linearVelocity[0];
 			lcp->camera_vel[1] = cp->st.n.linearVelocity[1];

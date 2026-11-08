@@ -375,7 +375,7 @@ void UpdateVolumeAttributesS(int channel, int proximity)
 		return;
 
 	// HACK: player car sounds are not affected with stereo
-	if (player[player_id].cameraView == 2)
+	if (CameraViewIsInside(player[player_id].cameraView))
 	{
 		if (channel == player[player_id].skidding.chan || channel == player[player_id].wheelnoise.chan)
 			return;

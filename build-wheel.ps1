@@ -28,6 +28,10 @@ try {
     if ($LASTEXITCODE) { throw 'Wheel model test compilation failed.' }
     & .\src_rebuild\bin\tests\wheel_model_tests.exe
     if ($LASTEXITCODE) { throw 'Wheel model tests failed.' }
+    & cmd.exe /d /c "`"$vcvars`" >nul && `"$cl`" /nologo /EHsc /std:c++14 /W4 tests\cockpit_model_tests.cpp /Fesrc_rebuild\bin\tests\cockpit_model_tests.exe /Fosrc_rebuild\bin\tests\cockpit_model_tests.obj"
+    if ($LASTEXITCODE) { throw 'Cockpit test compilation failed.' }
+    & .\src_rebuild\bin\tests\cockpit_model_tests.exe
+    if ($LASTEXITCODE) { throw 'Cockpit geometry tests failed.' }
     & cmd.exe /d /c "`"$vcvars`" >nul && `"$cl`" /nologo /EHsc /std:c++14 /DNTSC_VERSION /D_CRT_SECURE_NO_WARNINGS /Isrc_rebuild\Game /Isrc_rebuild\PsyCross\include /Isrc_rebuild\PsyCross\include\psx tests\wheel_game_tests.cpp /Fesrc_rebuild\bin\tests\wheel_game_tests.exe /Fosrc_rebuild\bin\tests\wheel_game_tests.obj"
     if ($LASTEXITCODE) { throw 'Wheel game test compilation failed.' }
     & .\src_rebuild\bin\tests\wheel_game_tests.exe

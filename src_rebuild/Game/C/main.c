@@ -61,6 +61,7 @@
 #include "cutrecorder.h"
 #ifndef PSX
 #include "wheel.h"
+#include "cockpit.h"
 #endif
 
 int levelstartpos[8][4] = {
@@ -2372,6 +2373,7 @@ void RenderGame2(int view)
 	DrawAllTheCars(view);
 
 #ifndef PSX
+	Cockpit_Draw(view);
 
 #ifdef DYNAMIC_LIGHTING
 	gNumDlights = 0;

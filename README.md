@@ -1,4 +1,7 @@
 # REDRIVER2 (Reverse-Engineered Driver 2)
+
+Prototype de vue cockpit (`wheel-controller-cockpit`) : [guide et limites](COCKPIT_SUPPORT.md), réglages dans `data/cockpit.ini`.
+
 [![Build status (Master)](https://ci.appveyor.com/api/projects/status/p3smpt14elwlpcad/branch/master?svg=true)](https://ci.appveyor.com/project/SoapyMan/redriver2/branch/master)
 
 Windows

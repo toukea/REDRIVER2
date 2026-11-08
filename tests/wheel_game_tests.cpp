@@ -28,6 +28,7 @@ int main(){
     Wheel_GameApply(cp);
     require(Wheel_GameActive(cp),"wheel bridge active");
     require(cp->wheel_angle>190 && cp->wheel_angle<210,"half steering bypasses PSX quantization");
+    require(std::fabs(Wheel_GameSteeringDegrees(cp)-225)<.11f,"900 degree wheel: half input gives 225 visual degrees");
     require(Wheel_GameBrake(cp)>.29f && Wheel_GameBrake(cp)<.31f,"analog brake preserved");
     require(Wheel_GameHandbrake(cp)==1 && cp->handbrake==1,"30 percent pull triggers Triangle handbrake");
     const int steer=cp->wheel_angle, rpm=cp->hd.revs;
@@ -36,9 +37,10 @@ int main(){
     require(Wheel_ReplaySave(file,base,sizeof(base)),"save wheel replay");
     Wheel_ReplayReset();require(!Wheel_GameActive(cp),"clear stale state");
     require(Wheel_ReplayLoad(file,base,sizeof(base)),"load matching replay");
-    NoPlayerControl=1;connected=false;g_wheelSettings.steeringLock=10;testInput=racing::Input();
+    NoPlayerControl=1;connected=false;g_wheelSettings.steeringLock=10;g_wheelSettings.rotation=360;testInput=racing::Input();
     Wheel_GameApply(cp);
     require(cp->wheel_angle==steer && cp->hd.revs==rpm,"playback independent of hardware and settings");
+    require(std::fabs(Wheel_GameSteeringDegrees(cp)-225)<.11f,"cockpit wheel replay ignores current hardware rotation");
     require(Wheel_GameBrake(cp)>.29f && Wheel_GameHandbrake(cp)==1,"pedals and Triangle latch preserved in playback");
     Wheel_GameFeedback();require(!forceCount,"replay does not send force to hardware");
     uint32_t wrong[]={WHEEL_REPLAY_MAGIC,1,2,3};
@@ -80,5 +82,16 @@ int main(){
     Wheel_GameContact(cp,0,-4000,4096,1,0,0);Wheel_GameContact(cp,2,-4000,4096,1,0,0);Wheel_GameFeedback();
     require(std::fabs(lastFrame.torque)<.1f,"locked front wheels go light");
     Wheel_GameFeedback();require(std::fabs(lastFrame.torque)<.0001f,"airborne front transmits no tyre torque");
+    g_wheelSettings.rotation=900;testInput.steering=-1;Wheel_GameApply(cp);
+    require(std::fabs(Wheel_GameSteeringDegrees(cp)+450)<.11f,"negative G29 lock matches cockpit angle");
+    frames[CameraCnt].flags&=~32;frames[CameraCnt].steeringDegrees=0;
+    require(Wheel_ReplaySave(file,base,sizeof(base)),"write older v2 frame without visual metadata");
+    require(Wheel_ReplayLoad(file,base,sizeof(base)),"older v2 reserved bytes remain compatible");
+    NoPlayerControl=1;Wheel_GameApply(cp);
+    require(std::isfinite(Wheel_GameSteeringDegrees(cp)) && Wheel_GameSteeringDegrees(cp)<0,"older v2 has deterministic steering-ratio fallback");
+    frames[CameraCnt].flags|=32;frames[CameraCnt].steeringDegrees=20000;
+    require(Wheel_ReplaySave(file,base,sizeof(base)),"write invalid visual metadata fixture");
+    require(!Wheel_ReplayLoad(file,base,sizeof(base)),"corrupt cockpit rotation is rejected on load");
+    remove("src_rebuild/bin/tests/wheel-test.D2RP.wheel");
     printf("PASS: %d game integration and replay checks\n",tests);
 }

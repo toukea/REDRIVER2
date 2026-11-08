@@ -25,7 +25,8 @@ struct Frame {
     int32_t frame=0, car=-1;
     int16_t steer=0, thrust=0, rpm=0, gear=0;
     uint16_t throttle=0, brake=0, clutch=0, handbrake=0;
-    uint16_t flags=0, reserved=0; // 1 active, 2 burnout, 4 stalled, 8 rejected shift
+    uint16_t flags=0; // 1 active, 2 burnout, 4 stalled, 8 rejected shift, 16 handbrake, 32 visual angle
+    int16_t steeringDegrees=0; // tenths of a degree, valid with flag 32; old v2 reserved=0
 };
 static_assert(sizeof(Frame)==28,"Wheel replay layout must be stable");
 Frame state[MAX_CARS];
@@ -60,6 +61,12 @@ float Wheel_GameBrake(const CAR_DATA* cp){return Wheel_GameActive(cp)?state[cp->
 float Wheel_GameHandbrake(const CAR_DATA* cp){return Wheel_GameActive(cp) && (state[cp->id].flags&16)?1.f:0;}
 int Wheel_GameGear(const CAR_DATA* cp){return Wheel_GameActive(cp)?state[cp->id].gear:0;}
 int Wheel_GameRPM(const CAR_DATA* cp){return Wheel_GameActive(cp)?state[cp->id].rpm:0;}
+float Wheel_GameSteeringDegrees(const CAR_DATA* cp){
+    if(!validCar(cp))return 0;
+    if(Wheel_GameActive(cp) && (state[cp->id].flags&32))return state[cp->id].steeringDegrees*.1f;
+    // Legacy/manette fallback is a visual steering ratio, not a physical G29 reading.
+    return cp->wheel_angle*(360.f/4096.f)*12.85f;
+}
 void Wheel_GameApply(CAR_DATA* cp){
     if(!validCar(cp))return;
     Frame& f=state[cp->id];bool wasActive=(f.flags&1)!=0;bool wasHandbrake=(f.flags&16)!=0;f.flags=0;
@@ -88,6 +95,8 @@ void Wheel_GameApply(CAR_DATA* cp){
     f.throttle=static_cast<uint16_t>(input.throttle*65535);f.brake=static_cast<uint16_t>(input.brake*65535);
     f.clutch=static_cast<uint16_t>(input.clutch*65535);f.handbrake=static_cast<uint16_t>(input.handbrake*65535);
     f.flags=1|(output.burnout?2:0)|(output.stalled?4:0)|(output.rejectedShift?8:0);
+    f.steeringDegrees=static_cast<int16_t>(std::lround(input.steering*racing::clamp(g_wheelSettings.rotation,180,2520)*5));
+    f.flags|=32;
     if(wasHandbrake ? input.handbrake>g_wheelSettings.handbrakeOff : input.handbrake>=g_wheelSettings.handbrakeOn) f.flags|=16;
     apply(cp,f);
     if(CameraCnt>=0 && size_t(CameraCnt)<frameLimit){if(frames.size()<=size_t(CameraCnt))frames.resize(CameraCnt+1);frames[CameraCnt]=f;}
@@ -177,7 +186,7 @@ bool Wheel_ReplayLoad(const char* path,const void* base,int size){
     uint32_t h[5]={};bool ok=fread(h,sizeof(h),1,file)==1 && h[0]==0x314c4857 && h[1]==2 && h[2]==checksum(base,size) && h[3]<=frameLimit && h[4]==sizeof(Frame);
     if(ok){frames.resize(h[3]);ok=frames.empty()||fread(frames.data(),sizeof(Frame),frames.size(),file)==frames.size();}
     fclose(file);
-    if(ok)for(size_t i=0;i<frames.size();++i){const Frame& f=frames[i];if(f.flags&1)if(f.frame!=int(i)||f.car<0||f.car>=MAX_CARS||f.gear<-1||f.gear>5||std::abs(int(f.steer))>512||std::abs(int(f.thrust))>15000||f.rpm<0||f.rpm>32000){ok=false;break;}}
+    if(ok)for(size_t i=0;i<frames.size();++i){const Frame& f=frames[i];if(f.flags&1)if(f.frame!=int(i)||f.car<0||f.car>=MAX_CARS||f.gear<-1||f.gear>5||std::abs(int(f.steer))>512||std::abs(int(f.thrust))>15000||f.rpm<0||f.rpm>32000||((f.flags&32)&&std::abs(int(f.steeringDegrees))>14400)){ok=false;break;}}
     if(!ok){Wheel_ReplayReset();printError("Invalid wheel replay sidecar: %s\n",name.c_str());}return ok;
 }
 #endif

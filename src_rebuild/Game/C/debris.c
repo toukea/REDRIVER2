@@ -483,7 +483,7 @@ void PlacePoolForCar(CAR_DATA *cp, CVECTOR *col, int front, int in_car)
 			s1[10].vz = s1[8].vz;
 			s1[11].vz = s1[3].vz;
 
-			if (player[CurrentPlayerView].cameraView == 2 && cp == &car_data[player[CurrentPlayerView].playerCarId])
+			if (CameraViewIsInside(player[CurrentPlayerView].cameraView) && cp == &car_data[player[CurrentPlayerView].cameraCarId])
 				LightSortCorrect = -320;
 			else
 				LightSortCorrect = -200;

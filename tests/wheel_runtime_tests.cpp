@@ -47,12 +47,15 @@ int main(int argc,char** argv){
         SDL_Quit();return 0;
     }
     SDL_setenv("SDL_VIDEODRIVER","dummy",1);
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,"1");
     require(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_JOYSTICK|SDL_INIT_HAPTIC)==0,"headless SDL initialization");
     SDL_VirtualJoystickDesc desc={};desc.version=SDL_VIRTUAL_JOYSTICK_DESC_VERSION;desc.type=SDL_JOYSTICK_TYPE_WHEEL;desc.naxes=4;desc.nbuttons=18;desc.name="Logitech G29 test device";
     int index=SDL_JoystickAttachVirtualEx(&desc);require(index>=0,"attach virtual wheel");
     auto* joystick=SDL_JoystickOpen(index);require(joystick!=nullptr,"open virtual wheel");
     g_wheelSettings.axes[0].deadzone=0;g_wheelSettings.axes[1].deadzone=0;
     g_wheelSettings.device=index;
+    // Physical USB devices can enumerate late on Windows and shift device indices.
+    SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick),g_wheelSettings.guid,sizeof(g_wheelSettings.guid));
     const char* path="src_rebuild/bin/tests/wheel-roundtrip.ini";
     g_wheelSettings.axes[0].center=123;g_wheelSettings.transmission.assisted=false;
     require(Wheel_SaveConfig(path),"save calibration");
@@ -111,8 +114,12 @@ int main(int argc,char** argv){
         require(std::fabs(g_wheelSettings.force.gain-.65f)<.001f && g_wheelSettings.ffbLog==1,"force feedback tab saves wheel.ini");
         remove(uiPath);remove("src_rebuild/bin/tests/wheel-ui.ini.bak");
     }
+    SDL_JoystickID instance=SDL_JoystickInstanceID(joystick);
+    int detachIndex=-1;
+    for(int i=0;i<SDL_NumJoysticks();++i)
+        if(SDL_JoystickGetDeviceInstanceID(i)==instance)detachIndex=i;
     SDL_JoystickClose(joystick);
-    require(SDL_JoystickDetachVirtual(index)==0,"detach virtual wheel");
+    require(SDL_JoystickDetachVirtual(detachIndex)==0,"detach virtual wheel");
     remove(path);remove("src_rebuild/bin/tests/wheel-roundtrip.ini.bak");
     SDL_Quit();printf("PASS: %d SDL device lifecycle and configuration checks\n",tests);
 }
