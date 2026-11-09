@@ -19,6 +19,7 @@
 #include <map>
 #include "PsyX/PsyX_render.h"
 #include "texture.h"
+#include "../../utils/vr_openxr.h"
 #include <cstdlib>
 
 namespace {
@@ -35,6 +36,8 @@ struct GpuTri { cockpit::Vec a,b,c; unsigned char uv[6]; cockpit::Color color; b
 std::vector<GpuTri> fixedImported, frameTris;
 std::string fixedName; cockpit::Placement fixedPlacement; bool fixedValid=false;
 bool usedBuckets[OTSIZE];int bucketCount=0;
+float nearClip=32;                 // GTE units; smaller in VR where the head can lean close to the dash
+float vrMapRect[4];bool vrMapRequested=false;
 struct FitCache { MODEL* model=nullptr;int id=-2,level=-1;cockpit::Profile p={}; } fitCache[MAX_CAR_RESIDENT_MODELS];
 float number(const char* section,const char* key,float fallback,float lo,float hi) {
     const char* s=config?ini_get(config,section,key):nullptr;
@@ -63,7 +66,7 @@ void drawTris(const std::vector<GpuTri>& tris,const MATRIX& rotation,cockpit::Ve
     for(const auto& tri:tris) {
         cockpit::UV uvs[3]={{float(tri.uv[0]),float(tri.uv[1])},{float(tri.uv[2]),float(tri.uv[3])},{float(tri.uv[4]),float(tri.uv[5])}};
         cockpit::ClipVertex source[3]={{transform(tri.a*-1,rotation)+translation,uvs[0]},{transform(tri.b*-1,rotation)+translation,uvs[1]},{transform(tri.c*-1,rotation)+translation,uvs[2]}};
-        cockpit::ClipVertex clipped[5];int count=cockpit::clipNearUV(source,3,clipped,32);
+        cockpit::ClipVertex clipped[5];int count=cockpit::clipNearUV(source,3,clipped,nearClip);
         float shade=tri.luminous?.95f:daylight*(.72f+.28f*std::fabs(cockpit::dot(cockpit::unit(cockpit::cross(tri.b-tri.a,tri.c-tri.a)),cockpit::unit({-.3f,1,.2f}))));
         for(int j=1;j<count-1;++j) {
             if(current->primptr+sizeof(POLY_FT3)+(bucketCount+2)*sizeof(DR_PSYX_TEX)>current->primtab+PRIMTAB_SIZE-4096)return;
@@ -104,6 +107,36 @@ void appendFlat(std::vector<GpuTri>& out,const cockpit::Mesh& mesh,bool lit=fals
         out.push_back(g);
     }
 }
+}
+// [VR] Satnav-style screen on top of the dashboard showing the game's minimap (the 2D map
+// itself is drawn by the headset view on this plane; here only its dark bezel is modelled).
+static void mapDisplay(std::vector<GpuTri>& out,const cockpit::Profile& p,float scale,const char* section,const MATRIX& rotation,cockpit::Vec translation) {
+    float size=number(section,"map_screen_size",number("cockpit","map_screen_size",1,.5f,2),.5f,2);
+    cockpit::Vec c={p.eye.x*.3f+number(section,"map_screen_x",number("cockpit","map_screen_x",0,-150,150),-150,150),
+                    p.wheel.y+p.radius*1.05f+.075f*scale+number(section,"map_screen_y",number("cockpit","map_screen_y",0,-150,150),-150,150),
+                    p.wheel.z+.17f*scale+number(section,"map_screen_z",number("cockpit","map_screen_z",0,-150,150),-150,150)};
+    float w=.17f*scale*size,h=w*60/64;
+    cockpit::Vec n=cockpit::unit(p.eye-c);
+    cockpit::Vec up=cockpit::unit(cockpit::Vec(0,1,0)-n*n.y);
+    cockpit::Vec right=cockpit::unit(cockpit::cross(up,n));
+    if(right.x<0)right=right*-1;
+    cockpit::Mesh bezel;
+    const cockpit::Color frame={34,35,38},rim={58,60,64};
+    float bw=w*.56f+.006f*scale,bh=h*.5f+.012f*scale,d=.03f*scale;
+    cockpit::Vec f=c-n*(.001f*scale),b=c-n*d;
+    auto corner=[&](cockpit::Vec o,float sx,float sy){return o+right*(bw*sx)+up*(bh*sy);};
+    bezel.quad(corner(f,-1,-1),corner(f,1,-1),corner(f,1,1),corner(f,-1,1),frame);   // face (the map covers its centre)
+    bezel.quad(corner(b,-1,-1),corner(b,-1,1),corner(b,1,1),corner(b,1,-1),frame);
+    bezel.quad(corner(f,-1,1),corner(f,1,1),corner(b,1,1),corner(b,-1,1),rim);
+    bezel.quad(corner(f,-1,-1),corner(b,-1,-1),corner(b,1,-1),corner(f,1,-1),frame);
+    bezel.quad(corner(f,-1,-1),corner(f,-1,1),corner(b,-1,1),corner(b,-1,-1),frame);
+    bezel.quad(corner(f,1,-1),corner(b,1,-1),corner(b,1,1),corner(f,1,1),frame);
+    // short stalk down to the dashboard
+    bezel.bar(c-up*(bh*.9f)-n*(d*.5f),c-up*(bh*.9f+.05f*scale)-n*(d*.5f),.008f*scale,frame);
+    appendFlat(out,bezel);
+    cockpit::Vec cc=transform((c+n*(.002f*scale))*-1,rotation)+translation;
+    cockpit::Vec rr=transform(right*(-w*.5f),rotation), uu=transform(up*(-h*.5f),rotation);
+    VR_SetMapScreen(vrMapRect,{cc.x,cc.y,cc.z},{rr.x,rr.y,rr.z},{uu.x,uu.y,uu.z});
 }
 void Cockpit_LoadConfig() {
     if(config)ini_free(config);
@@ -168,6 +201,16 @@ cockpit::Profile Cockpit_Profile(const CAR_DATA* car) {
     p.tilt=number(section,"wheel_tilt",p.tilt,0,65);
     return p;
 }
+float Cockpit_UnitsPerMetre(const CAR_DATA* car) {
+    if(!enabled || !car || !car->ap.carCos)return 0;
+    auto p=Cockpit_Profile(car);
+    ImportedCache* in=importedFor(car,p.family);
+    if(!in)return 0;
+    const auto& box=car->ap.carCos->colBox;
+    char section[64];snprintf(section,sizeof(section),"%s.%d",LevelNames[GameLevel],modelId(car));
+    return cockpit::place(in->data,p,float(box.vx),float(box.vz),number(section,"interior_scale",0,0,400)).scale;
+}
+void Cockpit_SetVRMapRect(const float rect[4]) {memcpy(vrMapRect,rect,sizeof(vrMapRect));vrMapRequested=true;}
 void Cockpit_EyeOffset(const CAR_DATA* car,VECTOR* offset) {
     auto eye=Cockpit_Profile(car).eye;
     offset->vx=-int(eye.x);offset->vy=-int(eye.y);offset->vz=-int(eye.z);
@@ -193,6 +236,9 @@ void Cockpit_Draw(int view) {
     frameTris.clear();movingMesh.triangles.clear();
     TextureID texture=0;
     ImportedCache* in=importedFor(car,p.family);
+    nearClip=VR_Active()?6.f:32.f;
+    const bool hideWheel=VR_HideWheel();
+    const bool mapScreen=vrMapRequested && VR_MapOnDashboard();vrMapRequested=false;
     if(in){
         if(!in->texture)in->texture=GR_CreateRGBATexture(in->data.atlasSize,in->data.atlasSize,in->data.rgba.data());
         texture=in->texture;
@@ -210,12 +256,13 @@ void Cockpit_Draw(int view) {
             printInfo("Cockpit %s uses %s: scale %.1f units/m, eyes=(%.1f %.1f %.1f)\n",section,in->data.credit.c_str(),pl.scale,p.eye.x,p.eye.y,p.eye.z);
         }
         cockpit::Vec centre=cockpit::mapPoint(pl,in->data.wheel);
-        for(const auto& t:in->data.tris)if(t.part==1){
+        if(!hideWheel)for(const auto& t:in->data.tris)if(t.part==1){
             GpuTri g{cockpit::rotateWheel(cockpit::mapPoint(pl,t.p[0]),centre,p.tilt,angle),cockpit::rotateWheel(cockpit::mapPoint(pl,t.p[1]),centre,p.tilt,angle),cockpit::rotateWheel(cockpit::mapPoint(pl,t.p[2]),centre,p.tilt,angle),{t.uv[0],t.uv[1],t.uv[2],t.uv[3],t.uv[4],t.uv[5]},t.color,false};
             frameTris.push_back(g);
         }
-        cockpit::controls(movingMesh,p,angle,0,rpm,showDriver,false);
+        cockpit::controls(movingMesh,p,angle,0,rpm,showDriver && !hideWheel,false);
         appendFlat(frameTris,movingMesh);
+        if(mapScreen)mapDisplay(frameTris,p,pl.scale,section,rotation,translation);
         cockpit::Mesh dials;
         cockpit::needles(dials,in->data,pl,std::fabs(car->hd.wheel_speed/4096.f*.3f)*3.6f,rpm);
         appendFlat(frameTris,dials,true,2);  // in front of the dial faces even without a Z-buffer

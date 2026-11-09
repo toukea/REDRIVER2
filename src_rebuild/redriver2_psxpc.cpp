@@ -25,6 +25,7 @@
 
 #include "utils/ini.h"
 #include "utils/wheel.h"
+#include "utils/vr_openxr.h"
 #include "Game/C/cockpit.h"
 #include <string>
 #ifdef _WIN32
@@ -691,8 +692,11 @@ int main(int argc, char** argv)
 			return result;
 		}
 	}
+	// Flat screen or VR launcher (vr.ini, -vr / -flat), before the OpenGL context is created.
+	VR_Configure(argc, argv);
 	PsyX_Initialise("REDRIVER2", fullScreen ? screenWidth : windowWidth, fullScreen ? screenHeight : windowHeight, fullScreen);
 	Wheel_Init();
+	VR_Init();
 	Cockpit_LoadConfig();
 
 	char version_info[32];
@@ -721,6 +725,7 @@ int main(int argc, char** argv)
 
 	DeinitStringMng();
 
+	VR_Shutdown();
 	Wheel_Shutdown();
 	PsyX_Shutdown();
 

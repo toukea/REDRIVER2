@@ -242,30 +242,67 @@ inline void controls(Mesh& m,const Profile& p,float degrees,float speed,float rp
     gauge(m,{p.eye.x+29,p.eye.y-31,face},4,.5f,SmallDial);
     }
     if(!driver) return;
-    // Head deliberately omitted. The seat/torso, not the camera, owns the body.
+    // Tanner: brown leather jacket over a grey T-shirt, jeans. Head deliberately omitted:
+    // the seat/torso, not the camera, owns the body.
+    const Color jacket={92,60,40}, jacketDark={64,42,29}, tee={128,128,124}, jeans={58,72,98}, shoe={38,33,30};
     Vec hip={p.eye.x,p.floor+30,p.eye.z-10};
+    float chestTop=p.eye.y-20;
+    m.material=Leather;
+    m.box(hip+Vec(-18,0,-14),{p.eye.x+18,chestTop,p.eye.z+5},jacket);
+    // open jacket: T-shirt strip and zip edges on the chest
     m.material=Cloth;
-    m.box(hip+Vec(-17,0,-13),{p.eye.x+17,p.eye.y-20,p.eye.z+6},shirt);
+    m.quad({p.eye.x-4.5f,hip.y+6,p.eye.z+5.2f},{p.eye.x+4.5f,hip.y+6,p.eye.z+5.2f},{p.eye.x+6,chestTop-1,p.eye.z+5.2f},{p.eye.x-6,chestTop-1,p.eye.z+5.2f},tee);
+    m.material=Leather;
+    m.bar({p.eye.x-5.5f,hip.y+6,p.eye.z+5.6f},{p.eye.x-7,chestTop-1,p.eye.z+5.6f},.7f,jacketDark);
+    m.bar({p.eye.x+5.5f,hip.y+6,p.eye.z+5.6f},{p.eye.x+7,chestTop-1,p.eye.z+5.6f},.7f,jacketDark);
+    float r=p.radius, finger=std::max(.75f,r*.036f);
     for(int side=-1;side<=1;side+=2) {
         Vec knee={p.eye.x+side*11.f,p.floor+23,p.eye.z+38};
         Vec ankle={p.eye.x+side*12.f,p.floor+10,p.eye.z+76};
-        m.material=Cloth;m.tube(hip+Vec(side*10.f,0,0),knee,8,7,pants);m.tube(knee,ankle,6,4,pants);
-        m.material=Leather;m.box(ankle+Vec(-5,-5,-3),ankle+Vec(5,2,14),rubber);
+        m.material=Cloth;m.tube(hip+Vec(side*10.f,0,0),knee,8,7,jeans,10);m.tube(knee,ankle,6.5f,4.5f,jeans,10);
+        m.material=Leather;m.box(ankle+Vec(-5,-5,-3),ankle+Vec(5,2,15),shoe);
         // Simplified sliding grip above 100 degrees avoids impossible arm twists.
-        // A later authored hand-over-hand clip can replace this pose generator.
         float grip=(side<0?180.f:0.f)-bound(degrees,-100,100);
-        Vec wrist=wheelPoint(p,grip,1,3);
+        float a=grip*pi/180, t=p.tilt*pi/180;
+        // Rim frame at the grip: outward radial, tangent (counter-clockwise), normal towards the driver.
+        Vec centre=wheelPoint(p,grip,1,0);
+        Vec radial=unit(wheelPoint(p,grip,1.2f,0)-centre);
+        Vec normal=unit(Vec(0,std::sin(t),-std::cos(t)));
+        Vec tangent=unit(cross(normal,radial));
+        if(dot(tangent,wheelPoint(p,grip+5,1,0)-centre)<0)tangent=tangent*-1;
+        float thick=r*.07f+1.5f;                       // rim cross-section radius plus skin
+        Vec wrist=centre+radial*(thick*.9f)+normal*(thick*2.6f)-tangent*(side*r*.05f);
         Vec shoulder={p.eye.x+side*18.f,p.eye.y-24,p.eye.z-4};
-        float upper=64, lower=58;
-        Vec joint=elbow(shoulder,wrist,upper,lower,side);
-        m.material=Cloth;m.tube(shoulder,joint,5.5f,4.5f,shirt);m.tube(joint,wrist,4.3f,3,shirt);
+        Vec joint=elbow(shoulder,wrist,64,58,side);
+        Vec cuff=wrist+unit(joint-wrist)*(r*.22f);
+        m.material=Leather;
+        m.tube(shoulder,joint,6.2f,5.2f,jacket,10);
+        m.tube(joint,cuff,5.2f,4.4f,jacket,10);
+        m.tube(cuff,cuff+unit(wrist-cuff)*1.2f,4.6f,4.6f,jacketDark,10);   // ribbed cuff
         m.material=Solid;
-        m.tube(wrist,wheelPoint(p,grip+12,1,2),3.2f,2.6f,skin);
-        m.tube(wrist,wheelPoint(p,grip,.84f,1),1.6f,1.1f,skin,6);
-        for(int finger=0;finger<3;++finger){
-            float a=grip+3+finger*4.f;
-            m.tube(wheelPoint(p,a,1,3),wheelPoint(p,a,.98f,-1),.85f,.7f,skin,5);
+        const Color skin={196,150,112};
+        m.tube(cuff,wrist,2.8f,2.6f,skin,8);
+        // Back of the hand rides over the rim towards the driver.
+        Vec knuckle=centre+radial*(thick*.7f)+normal*(thick*1.15f);
+        m.tube(wrist,knuckle,2.9f,2.5f,skin,8);
+        // Four fingers wrap the rim: knuckle side -> outer edge -> behind the rim.
+        for(int f=0;f<4;++f) {
+            float along=(f-1.5f)*finger*2.3f;
+            Vec off=tangent*along;
+            float len=f==3?.8f:1.f;
+            Vec k=knuckle+off;
+            Vec m1=centre+off+radial*(thick*1.05f)+normal*(thick*.35f);
+            Vec m2=centre+off+radial*(thick*.55f)-normal*(thick*.95f);
+            Vec tip=centre+off+radial*(-thick*.35f*len)-normal*(thick*.9f);
+            m.tube(k,m1,finger*1.1f,finger,skin,6);
+            m.tube(m1,m2,finger,finger*.95f,skin,6);
+            m.tube(m2,tip,finger*.95f,finger*.8f,skin,6);
         }
+        // Thumb along the inner edge of the rim, pointing at the spokes.
+        Vec thumbBase=wrist-radial*(thick*.6f)+normal*(thick*.4f);
+        Vec thumbTip=wheelPoint(p,grip+side*-14.f,.9f,thick*.9f);
+        m.tube(thumbBase,(thumbBase+thumbTip)*.5f,finger*1.25f,finger*1.1f,skin,6);
+        m.tube((thumbBase+thumbTip)*.5f,thumbTip,finger*1.1f,finger*.85f,skin,6);
     }
 }
 // Sutherland-Hodgman against the camera near plane, before GTE projection.

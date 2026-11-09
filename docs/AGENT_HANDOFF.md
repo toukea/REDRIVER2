@@ -1,5 +1,15 @@
 # Reprise technique et contexte — support sim racing
 
+## Extension réalité virtuelle (OpenXR) — 9 novembre 2026
+
+Branche `wheel-controller-vr`, issue de `codex/persistent-camera-view` (cockpit + vue persistante). Guide utilisateur : [VR_SUPPORT.md](../VR_SUPPORT.md). `VR_OPENXR_ANALYSE.md` reste un fichier non suivi de l'utilisateur.
+
+- Le jeu reste **Win32** : le PC de l'utilisateur fournit des runtimes OpenXR 32 bits (Virtual Desktop actif, Meta). Aucun SDK binaire : en-têtes Khronos dans `src_rebuild/utils/openxr/` (Apache-2.0 OR MIT), runtime trouvé via `XR_RUNTIME_JSON` puis la valeur de registre `ActiveRuntime`, négocié par `xrNegotiateLoaderRuntimeInterface` ; un `openxr_loader.dll` local est prioritaire.
+- `patches/psycross-vr.patch` (appliqué après le patch volant par `build-wheel.ps1`) : enregistrement des triangles de l'image (`GR_VR_*`), passes shader VR (1 = monde PGXP par œil, 2 = HUD 2D sur un plan, découpe par rectangle NDC pour la mini-carte), profondeur des sprites 2D depuis leur ancrage GTE, crochet `g_cfg_vrSwapHook` dans `GR_SwapWindow`, contexte OpenGL 4.x si VR. Le seuil de détection PGXP passe de `scr_h > 100` à `> 1` (le mode VR utilise `scr_z` 90).
+- Simulation inchangée à 30 Hz : `FilterFrameTime` laisse la boucle OpenXR rythmer le pas (`VR_PacesGame`) ; chaque image du jeu est réaffichée avec la différence de pose tête (construction → affichage).
+- Caméra : `Game/C/vrview.c` (après `InitCamera` dans `RenderGame2`) ; `camera.c` ignore `headPos` et le tangage cockpit en VR ; `cockpit.c` donne l'échelle de l'habitacle, l'écran GPS de la mini-carte et le plan proche réduit.
+- Validé : compilation et tests (`tests/vr_math_tests.cpp` 21 contrôles d'axes), session réelle Virtual Desktop + Quest 3 ouverte (FOCUSED, 2496×2688 par œil). Le premier essai casque a révélé le seuil PGXP ; la version corrigée attend le retour de l'utilisateur.
+
 ## Extension cockpit — 8 novembre 2026
 
 Persistance caméra : `utils/camera_preference.h`, intégration dans `camera.c` (uniquement changement explicite) et `players.c` (départ et transitions piéton/voiture). `data/camera-view.cfg` local ignoré par Git : deux joueurs, préférences voiture/à pied séparées. `start_in_cockpit` ne sert plus que de défaut avant premier choix. Ne pas enregistrer les vues imposées par les cinématiques/replays ni les replis temporaires.

@@ -1,0 +1,578 @@
+diff --git a/include/PsyX/PsyX_render.h b/include/PsyX/PsyX_render.h
+index ad168c3..13bbb62 100644
+--- a/include/PsyX/PsyX_render.h
++++ b/include/PsyX/PsyX_render.h
+@@ -216,6 +216,22 @@ extern void			GR_DrawTriangles(int start_vertex, int triangles);
+ extern void			GR_PushDebugLabel(const char* label);
+ extern void			GR_PopDebugLabel();
+ 
++/* [VR] stereo support: the game draws one frame per simulation step; the headset view replays it
++   for each eye with fresh head poses. See utils/vr_openxr.cpp in REDRIVER2. */
++extern void			(*g_cfg_vrSwapHook)(void);	/* called by GR_SwapWindow before presenting */
++extern int			g_cfg_vrModernGL;			/* request an OpenGL 4.x context first */
++
++extern void			GR_VR_EnableRecording(int enable);
++extern void			GR_VR_ClearRecord();
++extern int			GR_VR_RecordedVertices(int world);	/* world: 1 = PGXP 3D, 0 = 2D overlay */
++extern void			GR_VR_SetSpriteDepth(int enable);	/* give 2D sprites the depth of their GTE anchor */
++extern void			GR_VR_DrawRecorded(int pass);		/* 1 = world for one eye, 2 = 2D overlay plane */
++extern void			GR_VR_SetPassUniforms(int pass, const float* view, const float* proj);
++extern void			GR_VR_SetClip(int mode, const float* rect);
++extern void			GR_VR_SetDisp(float x, float y);
++extern void			GR_VR_SetFlatProjection();
++extern void			GR_VR_InvalidateCaches();
++
+ #if defined(_LANGUAGE_C_PLUS_PLUS)||defined(__cplusplus)||defined(c_plusplus)
+ }
+ #endif
+diff --git a/include/PsyX/common/pgxp_defs.h b/include/PsyX/common/pgxp_defs.h
+index 825f819..947f0a1 100644
+--- a/include/PsyX/common/pgxp_defs.h
++++ b/include/PsyX/common/pgxp_defs.h
+@@ -56,6 +56,7 @@ int		PGXP_GetCacheData(PGXPVData* out, uint lookup, ushort indexhint /* = 0xFFFF
+ 
+ /* used by primitive setup */
+ ushort	PGXP_GetIndex(int checkTransform);
++int		PGXP_GetCacheEntry(PGXPVData* out, ushort index);
+ 
+ #if defined(_LANGUAGE_C_PLUS_PLUS)||defined(__cplusplus)||defined(c_plusplus)
+ }
+diff --git a/src/gpu/PsyX_GPU.cpp b/src/gpu/PsyX_GPU.cpp
+index 6e9e6f6..185e4da 100644
+--- a/src/gpu/PsyX_GPU.cpp
++++ b/src/gpu/PsyX_GPU.cpp
+@@ -9,6 +9,7 @@
+ #include <assert.h>
+ #include <math.h>
+ #include <string.h>
++#include <vector>
+ 
+ #define GET_TPAGE_FORMAT(tpage) ((TexFormat)((tpage >> 7) & 0x3))
+ #define GET_TPAGE_BLEND(tpage)  ((BlendMode)(((tpage >> 5) & 3) + 1))
+@@ -176,6 +177,8 @@ void MakeLineArray(GrVertex* vertex, VERTTYPE* p0, VERTTYPE* p1, ushort gteidx)
+ 	ScreenCoordsToEmulator(vertex, 4);
+ }
+ 
++static int g_vrSpriteDepth = 0;
++
+ inline void ApplyVertexPGXP(GrVertex* v, VERTTYPE* p, float ofsX, float ofsY, ushort gteidx, int lookupOfs)
+ {
+ #if USE_PGXP
+@@ -201,6 +204,25 @@ inline void ApplyVertexPGXP(GrVertex* v, VERTTYPE* p, float ofsX, float ofsY, us
+ 		v->ofsY = (ofsY + gteOfsY) / dispH * 2.0f;
+ 		v->scr_h = vd.scr_h;
+ 	}
++	else if (g_vrSpriteDepth && gteidx != 0xffff && g_cfg_pgxpTextureCorrection &&
++		PGXP_GetCacheEntry(&vd, gteidx - 1) && vd.scr_h > 1.0f && vd.pz > 0.0f)
++	{
++		// [VR] a sprite expanded in screen space around its last GTE transform (smoke, lights,
++		// debris): unproject its corners at the anchor depth so each eye sees it in place.
++		float dispW, dispH;
++		DrawEnvDimensions(dispW, dispH);
++
++		v->x = (float(p[0]) - vd.ofx) / vd.scr_h * vd.pz;
++		v->y = (float(p[1]) - vd.ofy) / vd.scr_h * vd.pz;
++		v->z = vd.pz;
++
++		const float gteOfsX = fmodf(vd.ofx, dispW) - dispW * 0.5f;
++		const float gteOfsY = fmodf(vd.ofy, dispH) - dispH * 0.5f;
++
++		v->ofsX = (ofsX + gteOfsX) / dispW * 2.0f;
++		v->ofsY = (ofsY + gteOfsY) / dispH * 2.0f;
++		v->scr_h = vd.scr_h;
++	}
+ 	else
+ 	{
+ 		v->scr_h = 0.0f;
+@@ -750,6 +772,178 @@ void DrawSplit(const GPUDrawSplit& split)
+ 
+ extern int g_dbg_polygonSelected;
+ 
++//------------------------------------------------------------------------------------------------------------------------
++// [VR] Frame recording. Every on-screen draw of the frame is kept so the headset can replay it
++// for each eye, several times per simulation step, with the latest head pose.
++
++struct VRChunk
++{
++	int base;
++	int firstSplit;
++	int numSplits;
++};
++
++static int s_vrRecord = 0;
++static std::vector<GrVertex> s_vrVertices;
++static std::vector<GPUDrawSplit> s_vrSplits;
++static std::vector<VRChunk> s_vrChunks;
++static int s_vrWorldVertices = 0;
++static int s_vrOverlayVertices = 0;
++static int s_vrUploaded = 0;
++
++#if USE_OPENGL
++static GLuint s_vrVAO = 0;
++static GLuint s_vrVBO = 0;
++static size_t s_vrCapacity = 0;
++#endif
++
++void GR_VR_EnableRecording(int enable)
++{
++	s_vrRecord = enable;
++	if (!enable)
++		GR_VR_ClearRecord();
++}
++
++void GR_VR_ClearRecord()
++{
++	s_vrVertices.clear();
++	s_vrSplits.clear();
++	s_vrChunks.clear();
++	s_vrWorldVertices = 0;
++	s_vrOverlayVertices = 0;
++	s_vrUploaded = 0;
++}
++
++int GR_VR_RecordedVertices(int world)
++{
++	return world ? s_vrWorldVertices : s_vrOverlayVertices;
++}
++
++void GR_VR_SetSpriteDepth(int enable)
++{
++	g_vrSpriteDepth = enable;
++}
++
++static void VR_RecordSplits()
++{
++	if (!s_vrRecord || g_vertexIndex <= 0)
++		return;
++
++	VRChunk chunk;
++	chunk.base = (int)s_vrVertices.size();
++	chunk.firstSplit = (int)s_vrSplits.size();
++
++	for (int i = 1; i <= g_splitIndex; i++)
++	{
++		const GPUDrawSplit& split = g_splits[i];
++		if (!split.drawenv.dfe || split.numVerts == 0)
++			continue;	// render-to-VRAM passes are not part of the view
++
++		s_vrSplits.push_back(split);
++		for (int v = split.startVertex; v < split.startVertex + split.numVerts; v++)
++		{
++#if USE_PGXP
++			if (g_vertexBuffer[v].scr_h > 1.0f) s_vrWorldVertices++;
++			else s_vrOverlayVertices++;
++#else
++			s_vrOverlayVertices++;
++#endif
++		}
++	}
++
++	chunk.numSplits = (int)s_vrSplits.size() - chunk.firstSplit;
++	if (chunk.numSplits == 0)
++		return;
++
++	s_vrVertices.insert(s_vrVertices.end(), g_vertexBuffer, g_vertexBuffer + g_vertexIndex);
++	s_vrChunks.push_back(chunk);
++	s_vrUploaded = 0;
++}
++
++static void VR_UploadRecord()
++{
++#if USE_OPENGL
++	GLint previousBuffer = 0;
++	glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previousBuffer);
++
++	if (!s_vrVAO)
++	{
++		glGenVertexArrays(1, &s_vrVAO);
++		glGenBuffers(1, &s_vrVBO);
++	}
++
++	glBindVertexArray(s_vrVAO);
++	glBindBuffer(GL_ARRAY_BUFFER, s_vrVBO);
++
++	const size_t bytes = s_vrVertices.size() * sizeof(GrVertex);
++	if (bytes > s_vrCapacity)
++	{
++		s_vrCapacity = bytes + bytes / 2;
++		glBufferData(GL_ARRAY_BUFFER, s_vrCapacity, NULL, GL_STREAM_DRAW);
++	}
++	if (bytes)
++		glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, s_vrVertices.data());
++
++	glEnableVertexAttribArray(a_position);
++	glEnableVertexAttribArray(a_texcoord);
++	glEnableVertexAttribArray(a_color);
++	glEnableVertexAttribArray(a_extra);
++#if USE_PGXP
++	glEnableVertexAttribArray(a_zw);
++	glVertexAttribPointer(a_position, 4, GL_FLOAT, GL_FALSE, sizeof(GrVertex), &((GrVertex*)NULL)->x);
++	glVertexAttribPointer(a_zw, 4, GL_FLOAT, GL_FALSE, sizeof(GrVertex), &((GrVertex*)NULL)->z);
++#else
++	glVertexAttribPointer(a_position, 4, GL_SHORT, GL_FALSE, sizeof(GrVertex), &((GrVertex*)NULL)->x);
++#endif
++	glVertexAttribPointer(a_texcoord, 4, GL_UNSIGNED_BYTE, GL_FALSE, sizeof(GrVertex), &((GrVertex*)NULL)->u);
++	glVertexAttribPointer(a_color, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(GrVertex), &((GrVertex*)NULL)->r);
++	glVertexAttribPointer(a_extra, 4, GL_BYTE, GL_FALSE, sizeof(GrVertex), &((GrVertex*)NULL)->tcx);
++
++	glBindVertexArray(0);
++	glBindBuffer(GL_ARRAY_BUFFER, previousBuffer);
++#endif
++	s_vrUploaded = 1;
++}
++
++void GR_VR_DrawRecorded(int pass)
++{
++#if USE_OPENGL
++	if (s_vrChunks.empty())
++		return;
++
++	if (!s_vrUploaded)
++		VR_UploadRecord();
++
++	glBindVertexArray(s_vrVAO);
++	GR_SetScissorState(0);
++
++	for (size_t c = 0; c < s_vrChunks.size(); c++)
++	{
++		const VRChunk& chunk = s_vrChunks[c];
++		for (int i = chunk.firstSplit; i < chunk.firstSplit + chunk.numSplits; i++)
++		{
++			const GPUDrawSplit& split = s_vrSplits[i];
++
++			GR_SetStencilMode(split.drawPrimMode);
++			GR_SetTexture(split.textureId, split.texFormat);
++			if (split.texFormat == TF_32_BIT_RGBA)
++				GR_SetOverrideTextureSize(split.drawenv.tw.w, split.drawenv.tw.h);
++			GR_SetBlendMode(split.blendMode);
++
++			// PGXP keeps x / dispW and y / dispH: rescale to an isotropic camera space
++			// (Driver 2 maps a 4:3 picture onto its PSX display).
++			const float dispH = split.dispenv.disp.h > 0 ? (float)split.dispenv.disp.h : 240.0f;
++			GR_VR_SetDisp(dispH * 4.0f / 3.0f, dispH);
++			GR_VR_SetFlatProjection();
++
++			glDrawArrays(GL_TRIANGLES, chunk.base + split.startVertex, split.numVerts);
++		}
++	}
++
++	glBindVertexArray(0);
++#endif
++}
++
+ //
+ // Draws all polygons after AggregatePTAG
+ //
+@@ -790,6 +984,8 @@ void DrawAllSplits()
+ 	for (int i = 1; i <= g_splitIndex; i++)
+ 		DrawSplit(g_splits[i]);
+ 
++	VR_RecordSplits();
++
+ 	ClearSplits();
+ }
+ 
+diff --git a/src/gte/PsyX_GTE.cpp b/src/gte/PsyX_GTE.cpp
+index a9d42f0..9bc4b92 100644
+--- a/src/gte/PsyX_GTE.cpp
++++ b/src/gte/PsyX_GTE.cpp
+@@ -296,6 +296,17 @@ float g_pgxpZScale = 1.0f;
+ void PGXP_ClearCache()
+ {
+ 	g_pgxpVertexIndex = 0;
++	g_pgxpTransformed = 0;	// the first 2D primitive of the next frame must not reuse old entries
++}
++
++// [VR] direct access to one transformed vertex (used to give screen-space sprites a depth)
++int PGXP_GetCacheEntry(PGXPVData* out, ushort index)
++{
++	if (index >= g_pgxpVertexIndex || index == 0xffff)
++		return 0;
++
++	*out = g_pgxpCache[index];
++	return 1;
+ }
+ 
+ ushort PGXP_GetIndex(int checkTransform)
+diff --git a/src/render/PsyX_render.cpp b/src/render/PsyX_render.cpp
+index 9324471..3e6fec8 100644
+--- a/src/render/PsyX_render.cpp
++++ b/src/render/PsyX_render.cpp
+@@ -323,6 +323,20 @@ int GR_InitialiseGLContext(char* windowName, int fullscreen)
+ 	int minor_version = 3;
+ 	int profile = SDL_GL_CONTEXT_PROFILE_CORE;
+ 
++	// [VR] OpenXR runtimes usually require a recent desktop OpenGL; try 4.x first.
++	if (g_cfg_vrModernGL)
++	{
++		static const int modern[][2] = { {4,6}, {4,5}, {4,3}, {4,1} };
++		for (int i = 0; i < 4; i++)
++		{
++			SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, modern[i][0]);
++			SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, modern[i][1]);
++			SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, profile);
++			if (SDL_GL_CreateContext(g_window))
++				return 1;
++		}
++	}
++
+ 	// find best OpenGL version
+ 	do
+ 	{
+@@ -436,6 +450,7 @@ void GR_UpdateSwapIntervalState(int swapInterval)
+ void GR_BeginScene()
+ {
+ 	g_lastBoundTexture = 0;
++	GR_VR_ClearRecord();
+ 
+ #if USE_OPENGL
+ #ifdef RENDERER_OGLES
+@@ -495,6 +510,12 @@ typedef struct
+ 	GLint texelSizeLoc;
+ 	GLint texLoc;
+ 	GLint lutLoc;
++	GLint vrPassLoc;
++	GLint vrViewLoc;
++	GLint vrProjLoc;
++	GLint vrDispLoc;
++	GLint vrClipLoc;
++	GLint vrClipModeLoc;
+ #endif
+ } PSXGPU_Shader;
+ 
+@@ -508,6 +529,11 @@ PSXGPU_Shader g_gpu_shader_32_rgba;
+ GLint u_projectionLoc;
+ GLint u_projection3DLoc;
+ GLint u_texelSizeLoc;
++PSXGPU_Shader* g_currentPsxShader = NULL;
++
++// [VR] stereo rendering hooks (see GR_VR_* below and utils/vr_openxr.cpp in the game)
++void (*g_cfg_vrSwapHook)(void) = NULL;
++int g_cfg_vrModernGL = 0;
+ 
+ #define GPU_SAMPLE_TEXTURE_4BIT_FUNC\
+     "   // returns 16 bit colour\n"\
+@@ -556,6 +582,18 @@ GLint u_texelSizeLoc;
+ 		"	vec2 VRAM(vec2 uv) { return texture2D(s_texture, uv).rg; }\n"
+ #endif
+ 
++// [VR] HUD pass: with VRClipMode > 0 only fragments inside the window-space NDC rectangle
++// VRClip = (xmin, ymin, xmax, ymax) are kept; with VRClipMode < 0 only those outside it.
++#define GPU_VR_CLIP \
++	"	uniform vec4 VRClip;\n"\
++	"	uniform int VRClipMode;\n"\
++	"	varying vec2 v_vrNdc;\n"\
++	"	void vrClip() {\n"\
++	"		if (VRClipMode == 0) return;\n"\
++	"		bool inside = v_vrNdc.x >= VRClip.x && v_vrNdc.y >= VRClip.y && v_vrNdc.x <= VRClip.z && v_vrNdc.y <= VRClip.w;\n"\
++	"		if ((VRClipMode > 0) != inside) discard;\n"\
++	"	}\n"
++
+ #if defined(RENDERER_OGL) || (OGLES_VERSION == 3)
+ 
+ #	define GPU_DITHERING \
+@@ -564,7 +602,9 @@ GLint u_texelSizeLoc;
+ 		"		+2.0,  -2.0,  +3.0,  -1.0,\n"\
+ 		"		-3.0,  +1.0,  -4.0,  +0.0,\n"\
+ 		"		+3.0,  -1.0,  +2.0,  -2.0) / 255.0;\n"\
++		GPU_VR_CLIP\
+ 		"	vec4 dither(vec4 color) {\n"\
++		"		vrClip();\n"\
+ 		"		ivec2 dc = ivec2(fract(gl_FragCoord.xy / 4.0) * 4.0);\n"\
+ 		"		color.xyz += vec3(c_dither[dc.x][dc.y] * v_texcoord.w);\n"\
+ 		"		return color;\n"\
+@@ -576,7 +616,8 @@ GLint u_texelSizeLoc;
+ #else
+ 
+ #	define GPU_DITHERING \
+-		"	vec4 dither(vec4 color) { return color; }\n"
++		GPU_VR_CLIP\
++		"	vec4 dither(vec4 color) { vrClip(); return color; }\n"
+ 
+ #	define GPU_ARRAY_FUNC \
+ 		"	float _idx2(vec2 array, int idx) { return idx == 0 ? array.x : array.y; }\n"
+@@ -648,13 +689,32 @@ const char* gpu_shader_32_rgba =
+ 		"		vec4(0.0,  0.0,  1.0,  0.0),\n"\
+ 		"		vec4(a_zw.z, -a_zw.w,  0.0,  1.0));\n"\
+ 		"	vec2 geom_ofs = vec2(0.5, 0.5);\n"\
+-		"	vec4 fragPosition = (a_zw.y > 100.0 ? ofsMat * (Projection3D * vec4((a_position.xy + geom_ofs) * vec2(1.0,-1.0) * a_zw.y, a_zw.x, 1.0)) : (Projection * vec4(a_position.xy, 0.5, 1.0)));\n" \
++		"	vec4 fragPosition = (a_zw.y > 1.0 ? ofsMat * (Projection3D * vec4((a_position.xy + geom_ofs) * vec2(1.0,-1.0) * a_zw.y, a_zw.x, 1.0)) : (Projection * vec4(a_position.xy, 0.5, 1.0)));\n" \
+ 		"	gl_Position = fragPosition;\n"
+ #else
+ #	define GTE_PERSPECTIVE_CORRECTION \
+ 		"	gl_Position = Projection * vec4(a_position.xy, 0.0, 1.0);\n"
+ #endif
+ 
++#if USE_PGXP
++// [VR] pass 1: PGXP world vertices reprojected for one eye; 2D vertices dropped.
++//      pass 2: 2D (HUD) vertices placed on a plane in the headset space; world dropped.
++#	define GTE_VR_POSITION \
++		"	v_vrNdc = (Projection * vec4(a_position.xy, 0.5, 1.0)).xy;\n"\
++		"	if (VRPass == 1) {\n"\
++		"		if (a_zw.y > 1.0) {\n"\
++		"			vec3 p = vec3((a_position.x + 0.5) * VRDisp.x, (a_position.y + 0.5) * VRDisp.y, a_zw.x);\n"\
++		"			gl_Position = VRProj * (VRView * vec4(p, 1.0));\n"\
++		"		} else gl_Position = vec4(0.0, 0.0, 2.0, 1.0);\n"\
++		"	} else if (VRPass == 2) {\n"\
++		"		if (a_zw.y > 1.0) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);\n"\
++		"		else gl_Position = VRProj * (VRView * vec4(v_vrNdc, 0.0, 1.0));\n"\
++		"	}\n"
++#else
++#	define GTE_VR_POSITION \
++		"	v_vrNdc = (Projection * vec4(a_position.xy, 0.5, 1.0)).xy;\n"
++#endif
++
+ #define GTE_VERTEX_SHADER \
+ 	"	attribute vec4 a_position;\n"\
+ 	"	attribute vec4 a_texcoord; // uv, color multiplier, dither\n"\
+@@ -663,6 +723,11 @@ const char* gpu_shader_32_rgba =
+ 	"	attribute vec4 a_zw;\n"\
+ 	"	uniform mat4 Projection;\n"\
+ 	"	uniform mat4 Projection3D;\n"\
++	"	uniform int VRPass;\n"\
++	"	uniform mat4 VRView;\n"\
++	"	uniform mat4 VRProj;\n"\
++	"	uniform vec2 VRDisp;\n"\
++	"	varying vec2 v_vrNdc;\n"\
+ 	"	const vec2 c_UVFudge = vec2(0.00025, 0.00025);\n"\
+ 	"	void main() {\n"\
+ 	"		v_texcoord = a_texcoord;\n"\
+@@ -677,6 +742,7 @@ const char* gpu_shader_32_rgba =
+ 	"		v_page_clut.zw += c_UVFudge;\n"\
+ 	GTE_PERSPECTIVE_CORRECTION\
+ 	"		v_z = (gl_Position.z - 40.0) * 0.005;\n"\
++	GTE_VR_POSITION\
+ 	"	}\n"
+ 
+ int GR_Shader_CheckShaderStatus(GLuint shader)
+@@ -926,6 +992,12 @@ void GR_CompilePSXShader(PSXGPU_Shader* sh, const char* source)
+ 	sh->texelSizeLoc = glGetUniformLocation(sh->shader, "texelSize");
+ 	sh->texLoc = glGetUniformLocation(sh->shader, "s_texture");
+ 	sh->lutLoc = glGetUniformLocation(sh->shader, "s_rgLut");
++	sh->vrPassLoc = glGetUniformLocation(sh->shader, "VRPass");
++	sh->vrViewLoc = glGetUniformLocation(sh->shader, "VRView");
++	sh->vrProjLoc = glGetUniformLocation(sh->shader, "VRProj");
++	sh->vrDispLoc = glGetUniformLocation(sh->shader, "VRDisp");
++	sh->vrClipLoc = glGetUniformLocation(sh->shader, "VRClip");
++	sh->vrClipModeLoc = glGetUniformLocation(sh->shader, "VRClipMode");
+ #if USE_PGXP
+ 	sh->projection3DLoc = glGetUniformLocation(sh->shader, "Projection3D");
+ #endif
+@@ -1243,6 +1315,7 @@ void GR_SetTexture(TextureID texture, TexFormat texFormat)
+ 	{
+ 	case TF_4_BIT:
+ 		GR_SetShader(g_gpu_shader_4.shader);
++		g_currentPsxShader = &g_gpu_shader_4;
+ 		bilinearFilterLoc = g_gpu_shader_4.bilinearFilterLoc;
+ 		u_projectionLoc = g_gpu_shader_4.projectionLoc;
+ 		u_projection3DLoc = g_gpu_shader_4.projection3DLoc;
+@@ -1252,6 +1325,7 @@ void GR_SetTexture(TextureID texture, TexFormat texFormat)
+ 		break;
+ 	case TF_8_BIT:
+ 		GR_SetShader(g_gpu_shader_8.shader);
++		g_currentPsxShader = &g_gpu_shader_8;
+ 		bilinearFilterLoc = g_gpu_shader_8.bilinearFilterLoc;
+ 		u_projectionLoc = g_gpu_shader_8.projectionLoc;
+ 		u_projection3DLoc = g_gpu_shader_8.projection3DLoc;
+@@ -1261,6 +1335,7 @@ void GR_SetTexture(TextureID texture, TexFormat texFormat)
+ 		break;
+ 	case TF_16_BIT:
+ 		GR_SetShader(g_gpu_shader_16.shader);
++		g_currentPsxShader = &g_gpu_shader_16;
+ 		bilinearFilterLoc = g_gpu_shader_16.bilinearFilterLoc;
+ 		u_projectionLoc = g_gpu_shader_16.projectionLoc;
+ 		u_projection3DLoc = g_gpu_shader_16.projection3DLoc;
+@@ -1270,6 +1345,7 @@ void GR_SetTexture(TextureID texture, TexFormat texFormat)
+ 		break;
+ 	case TF_32_BIT_RGBA:
+ 		GR_SetShader(g_gpu_shader_32_rgba.shader);
++		g_currentPsxShader = &g_gpu_shader_32_rgba;
+ 		bilinearFilterLoc = -1;
+ 		u_projectionLoc = g_gpu_shader_32_rgba.projectionLoc;
+ 		u_projection3DLoc = g_gpu_shader_32_rgba.projection3DLoc;
+@@ -1306,6 +1382,74 @@ void GR_SetTexture(TextureID texture, TexFormat texFormat)
+ 	g_lastBoundTexture = texture;
+ }
+ 
++//--------------------------------------------------------------------------------------------
++// [VR] uniforms shared by the stereo passes. The flat renderer always runs with VRPass = 0.
++
++static PSXGPU_Shader* VR_Shaders(int i)
++{
++	PSXGPU_Shader* list[] = { &g_gpu_shader_4, &g_gpu_shader_8, &g_gpu_shader_16, &g_gpu_shader_32_rgba };
++	return list[i];
++}
++
++void GR_VR_SetPassUniforms(int pass, const float* view, const float* proj)
++{
++#if USE_OPENGL
++	for (int i = 0; i < 4; i++)
++	{
++		PSXGPU_Shader* sh = VR_Shaders(i);
++		glUseProgram(sh->shader);
++		glUniform1i(sh->vrPassLoc, pass);
++		if (view) glUniformMatrix4fv(sh->vrViewLoc, 1, GL_FALSE, view);
++		if (proj) glUniformMatrix4fv(sh->vrProjLoc, 1, GL_FALSE, proj);
++		if (pass == 0) glUniform1i(sh->vrClipModeLoc, 0);
++	}
++	g_PreviousShader = -1;
++	g_currentPsxShader = NULL;
++#endif
++}
++
++void GR_VR_SetClip(int mode, const float* rect)
++{
++#if USE_OPENGL
++	for (int i = 0; i < 4; i++)
++	{
++		PSXGPU_Shader* sh = VR_Shaders(i);
++		glUseProgram(sh->shader);
++		glUniform1i(sh->vrClipModeLoc, mode);
++		if (rect) glUniform4fv(sh->vrClipLoc, 1, rect);
++	}
++	g_PreviousShader = -1;
++	g_currentPsxShader = NULL;
++#endif
++}
++
++void GR_VR_SetDisp(float x, float y)
++{
++#if USE_OPENGL
++	if (g_currentPsxShader)
++		glUniform2f(g_currentPsxShader->vrDispLoc, x, y);
++#endif
++}
++
++// Same 2D mapping as the on-screen path of GR_SetOffscreenState, without touching render targets.
++void GR_VR_SetFlatProjection()
++{
++#if USE_PGXP
++	const float emuScreenAspect = (float)(g_windowWidth) / (float)(g_windowHeight);
++	GR_Ortho2D(-0.5f * emuScreenAspect * PSX_SCREEN_ASPECT, 0.5f * emuScreenAspect * PSX_SCREEN_ASPECT, 0.5f, -0.5f, -1.0f, 1.0f);
++#else
++	GR_Ortho2D(0, activeDispEnv.disp.w, activeDispEnv.disp.h, 0, -1.0f, 1.0f);
++#endif
++}
++
++// Leave the GL state caches coherent after foreign code changed programs or textures.
++void GR_VR_InvalidateCaches()
++{
++	g_PreviousShader = -1;
++	g_currentPsxShader = NULL;
++	g_lastBoundTexture = 0;
++}
++
+ void GR_SetOverrideTextureSize(int width, int height)
+ {
+ 	if(u_texelSizeLoc == -1)
+@@ -1708,6 +1852,10 @@ void GR_UpdateVRAM()
+ 
+ void GR_SwapWindow()
+ {
++	// [VR] submit the headset frames (and the desktop mirror) before presenting the window
++	if (g_cfg_vrSwapHook)
++		g_cfg_vrSwapHook();
++
+ #if defined(RENDERER_OGL) || defined(RENDERER_OGLES)
+ 	SDL_GL_SwapWindow(g_window);
+ #endif

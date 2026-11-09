@@ -150,6 +150,9 @@ void Wheel_Stop() {
     forcePrimed = false;
 }
 void Wheel_Shutdown() { closeDevices(); initialized=false; active=false; }
+// In VR the headset can own the input focus while the desktop window does not.
+bool (*g_wheelExtraFocus)() = nullptr;
+static bool hasInputFocus() { return SDL_GetKeyboardFocus() || (g_wheelExtraFocus && g_wheelExtraFocus()); }
 void Wheel_Poll(bool driving) {
     if (!initialized) return;
     bool detached = false;
@@ -168,7 +171,7 @@ void Wheel_Poll(bool driving) {
             SDL_Log("Wheel: reloaded %s",path.c_str());
         }
     }
-    active = driving && devices[0] && SDL_GetKeyboardFocus();
+    active = driving && devices[0] && hasInputFocus();
     if (!active) Wheel_Stop();
     SDL_JoystickUpdate();
 }
@@ -187,10 +190,13 @@ bool Wheel_SampleDevices(racing::Input& input) {
     if (pressed>1) input.gear=0;
     return true;
 }
+bool Wheel_RawButton(int index) {
+    return devices[0] && index>=0 && index<SDL_JoystickNumButtons(devices[0]) && SDL_JoystickGetButton(devices[0],index);
+}
 unsigned Wheel_Buttons(unsigned& edges) {
     static unsigned previous=0;
     unsigned bits=0;
-    if(devices[0] && SDL_GetKeyboardFocus()) {
+    if(devices[0] && hasInputFocus()) {
         const unsigned map[]={0x40,0x80,0x20,0x10,0x8,0x4,0x1,0x2,0x100,0x800,0x200,0x400};
         for(int b=0;b<12;++b) if(button(devices[0],b)) bits|=map[b];
         if(SDL_JoystickNumHats(devices[0])) {
@@ -202,7 +208,7 @@ unsigned Wheel_Buttons(unsigned& edges) {
     edges=bits&~previous;previous=bits;return bits;
 }
 racing::ForceReport Wheel_Force(const racing::ForceFrame& frame) {
-    if (!active || !haptic || effectId < 0 || !SDL_GetKeyboardFocus()) { Wheel_Stop(); return racing::ForceReport(); }
+    if (!active || !haptic || effectId < 0 || !hasInputFocus()) { Wheel_Stop(); return racing::ForceReport(); }
     const racing::ForceSetup& setup = g_wheelSettings.force;
     const float steer = axisValue(0);
     racing::ForceReport report = shaper.step(frame,setup);

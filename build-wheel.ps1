@@ -32,6 +32,10 @@ try {
     if ($LASTEXITCODE) { throw 'Cockpit test compilation failed.' }
     & .\src_rebuild\bin\tests\cockpit_model_tests.exe
     if ($LASTEXITCODE) { throw 'Cockpit geometry tests failed.' }
+    & cmd.exe /d /c "`"$vcvars`" >nul && `"$cl`" /nologo /EHsc /std:c++14 /W4 tests\vr_math_tests.cpp /Fesrc_rebuild\bin\tests\vr_math_tests.exe /Fosrc_rebuild\bin\tests\vr_math_tests.obj"
+    if ($LASTEXITCODE) { throw 'VR maths test compilation failed.' }
+    & .\src_rebuild\bin\tests\vr_math_tests.exe
+    if ($LASTEXITCODE) { throw 'VR maths tests failed.' }
     & cmd.exe /d /c "`"$vcvars`" >nul && `"$cl`" /nologo /EHsc /std:c++14 /DNTSC_VERSION /D_CRT_SECURE_NO_WARNINGS /Isrc_rebuild\Game /Isrc_rebuild\PsyCross\include /Isrc_rebuild\PsyCross\include\psx tests\wheel_game_tests.cpp /Fesrc_rebuild\bin\tests\wheel_game_tests.exe /Fosrc_rebuild\bin\tests\wheel_game_tests.obj"
     if ($LASTEXITCODE) { throw 'Wheel game test compilation failed.' }
     & .\src_rebuild\bin\tests\wheel_game_tests.exe
@@ -42,13 +46,16 @@ try {
     & .\src_rebuild\bin\tests\wheel_runtime_tests.exe
     if ($LASTEXITCODE) { throw 'Wheel SDL tests failed.' }
     if ($TestsOnly) { return }
-    # Keep the upstream submodule reference; apply the small, tracked compatibility patch.
-    git -C src_rebuild/PsyCross apply --reverse --check ../../patches/psycross-wheel.patch 2>$null
-    if ($LASTEXITCODE) {
-        git -C src_rebuild/PsyCross apply --check ../../patches/psycross-wheel.patch
-        if ($LASTEXITCODE) { throw 'PsyCross has conflicting changes; inspect patches/psycross-wheel.patch.' }
-        git -C src_rebuild/PsyCross apply ../../patches/psycross-wheel.patch
-        if ($LASTEXITCODE) { throw 'Cannot apply PsyCross wheel patch.' }
+    # Keep the upstream submodule reference; apply the small, tracked compatibility patches
+    # (wheel input, then OpenXR stereo rendering).
+    foreach ($patch in @('psycross-wheel.patch', 'psycross-vr.patch')) {
+        git -C src_rebuild/PsyCross apply --reverse --check ../../patches/$patch 2>$null
+        if ($LASTEXITCODE) {
+            git -C src_rebuild/PsyCross apply --check ../../patches/$patch
+            if ($LASTEXITCODE) { throw "PsyCross has conflicting changes; inspect patches/$patch." }
+            git -C src_rebuild/PsyCross apply ../../patches/$patch
+            if ($LASTEXITCODE) { throw "Cannot apply PsyCross patch $patch." }
+        }
     }
     $env:SDL2_DIR = 'dependencies/SDL2-2.30.2'
     $env:OPENAL_DIR = 'dependencies/openal-soft-1.23.1-bin'

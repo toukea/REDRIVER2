@@ -9,4 +9,6 @@ int Cockpit_ViewPitch();
 cockpit::Profile Cockpit_Profile(const CAR_DATA* car);
 void Cockpit_EyeOffset(const CAR_DATA* car, VECTOR* offset);
 void Cockpit_Draw(int view);
+float Cockpit_UnitsPerMetre(const CAR_DATA* car); // imported cabin scale, 0 without one
+void Cockpit_SetVRMapRect(const float rect[4]);     // [VR] minimap region to show on the dash screen
 #endif

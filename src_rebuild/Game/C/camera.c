@@ -20,6 +20,7 @@
 #include "map.h"
 #ifndef PSX
 #include "cockpit.h"
+#include "../../utils/vr_openxr.h"
 #include "../../utils/camera_preference.h"
 
 static camera_preference::Preferences& CameraPreferences()
@@ -629,8 +630,10 @@ void PlaceCameraInCar(PLAYER *lp, int BumperCam)
 			SetRotMatrix(&cp->hd.drawCarMat);
 			_MatrixRotate(&viewer_position);
 			bool back = (paddCamera & CAMERA_PAD_LOOK_BACK) == CAMERA_PAD_LOOK_BACK || (paddCamera & CAMERA_PAD_LOOK_BACK_DED);
-			_RotMatrixY(&inv_camera_matrix, back ? 0 : 2048 + (lp->headPos >> 16));
-			_RotMatrixX(&inv_camera_matrix, Cockpit_ViewPitch());
+			// [VR] the real head replaces the look buttons and the fixed cockpit pitch
+			const int headYaw = VR_Active() ? 0 : (lp->headPos >> 16);
+			_RotMatrixY(&inv_camera_matrix, back ? 0 : 2048 + headYaw);
+			_RotMatrixX(&inv_camera_matrix, VR_Active() ? 0 : Cockpit_ViewPitch());
 		}
 		else
 #endif
@@ -646,7 +649,11 @@ void PlaceCameraInCar(PLAYER *lp, int BumperCam)
 				_MatrixRotate(&viewer_position);
 
 				// rotate head
+#ifndef PSX
+				_RotMatrixY(&inv_camera_matrix, 2048 + (VR_Active() ? 0 : (lp->headPos >> 16)));
+#else
 				_RotMatrixY(&inv_camera_matrix, 2048 + (lp->headPos >> 16));
+#endif
 			}
 		}
 

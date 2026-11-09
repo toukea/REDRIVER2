@@ -23,6 +23,7 @@ void Wheel_Poll(bool driving);
 bool Wheel_Read(racing::Input& input);
 bool Wheel_SampleDevices(racing::Input& input); // Read-only diagnostics, no focus requirement.
 unsigned Wheel_Buttons(unsigned& edges);
+bool Wheel_RawButton(int index);           // raw device button (VR recentre binding)
 racing::ForceReport Wheel_Force(const racing::ForceFrame& frame);
 void Wheel_Stop();
 void Wheel_LoadConfig(const char* path);

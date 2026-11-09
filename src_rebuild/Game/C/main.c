@@ -62,6 +62,8 @@
 #ifndef PSX
 #include "wheel.h"
 #include "cockpit.h"
+#include "vrview.h"
+#include "../../utils/vr_openxr.h"
 #endif
 
 int levelstartpos[8][4] = {
@@ -1273,6 +1275,15 @@ int FilterFrameTime()
 {
 	static int frame = 0;
 
+#ifndef PSX
+	// [VR] the headset frame loop already spent this step's time in the swap
+	if (VR_PacesGame())
+	{
+		frame = VSync(-1);
+		return 1;
+	}
+#endif
+
 	// always stay 30 FPS (2 vblanks)
 	if (VSync(-1) - frame < 2)
 		return 0;
@@ -1616,6 +1627,9 @@ void DrawGame(void)
 	if (NumPlayers == 1 || NoPlayerControl)
 	{
 		ObjectDrawnValue = FrameCnt;
+#ifndef PSX
+		PGXP_GetIndex(1);
+#endif
 		DrawPauseMenus();
 
 		RenderGame2(0);
@@ -2231,12 +2245,18 @@ void RenderGame2(int view)
 	InitCamera(&player[view]);
 
 #ifndef PSX
+	// [VR] head pose on top of the game camera (cockpit, bumper and chase views)
+	VRView_Apply(view);
+
 	int screenW, screenH;
 	PsyX_GetScreenSize(&screenW, &screenH);
 
 	float aspectVar = float(screenH) / float(screenW);
 
 	FrAng = ratan2(160, float(scr_z) * aspectVar * 1.35f);
+
+	if (VRView_Tracked())
+		FrAng = VRView_FrAng();
 
 	extern void DoFreeCamera();
 	DoFreeCamera();
@@ -2254,6 +2274,9 @@ void RenderGame2(int view)
 		DrawAllPedestrians();
 
 	// do a lot of stuff
+#ifndef PSX
+	PGXP_GetIndex(1);	// [VR] 2D overlays must not borrow the depth of the last 3D vertex
+#endif
 	DisplayMissionTitle();
 	DrawInGameCutscene();
 
@@ -2284,6 +2307,9 @@ void RenderGame2(int view)
 	if (AttractMode != 0)
 	{
 		int colour;
+#ifndef PSX
+		PGXP_GetIndex(1);
+#endif
 		colour = CameraCnt & 0x1f;
 
 		if (colour > 15)
@@ -2303,9 +2329,15 @@ void RenderGame2(int view)
 		}
 	}
 
+#ifndef PSX
+	PGXP_GetIndex(1);
+#endif
 	if (gLoadedOverlay)
 		DisplayOverlays();
 
+#ifndef PSX
+	PGXP_GetIndex(1);
+#endif
 	DrawMission();
 
 	if (!FastForward && NumPlayers == 1)
@@ -2382,6 +2414,8 @@ void RenderGame2(int view)
 	extern void DrawDebugOverlays();
 
 	DrawDebugOverlays();
+
+	VRView_Restore();
 #endif
 }
 
