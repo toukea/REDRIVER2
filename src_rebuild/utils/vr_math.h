@@ -150,4 +150,12 @@ inline Mat4 worldView(const Pose& eye, const Pose& gen, float metresPerPgxpUnit)
     return mul(fromPose(compose(inverse(eye),gen)),scale4(s,-s,-s));
 }
 
+// Headset frames shown without a new submission between two of ours: consecutive predicted
+// display times normally advance by exactly one period (times and period in nanoseconds).
+inline int skippedPeriods(long long previous, long long current, long long period) {
+    if (previous <= 0 || period <= 0 || current <= previous) return 0;
+    long long steps=(current-previous+period/2)/period;
+    return steps>1?int(steps-1):0;
+}
+
 } // namespace vrm

@@ -43,6 +43,7 @@ La fenêtre du PC montre l'œil gauche (recadré) pendant la conduite et le jeu 
 | `horizon_lock` | 1.0 | 1 = horizon fixe, 0 = la vue roule avec la voiture |
 | `scr_z` | 90 | Distance de projection du jeu pendant le suivi de tête : plus petite = champ dessiné plus large |
 | `near_plane` | 0.03 | Plan proche en mètres |
+| `perf_log` | 1 | Ligne de mesures `VR: perf` dans le journal toutes les 5 s |
 
 ## Fonctionnement
 
@@ -51,6 +52,20 @@ La fenêtre du PC montre l'œil gauche (recadré) pendant la conduite et le jeu 
 - **`src_rebuild/Game/C/vrview.c`** applique la pose de tête à la caméra du jeu (cockpit, pare-chocs et poursuite), élargit le champ dessiné et calcule le rectangle de la mini-carte.
 - Entre deux pas de simulation, la différence entre la pose de tête qui a servi à construire l'image et la pose actuelle des yeux est appliquée dans le shader : la tête reste réactive sans faire tourner le jeu plus vite.
 - `tests/vr_math_tests.cpp` vérifie les conventions d'axes (tête à gauche = regard à gauche, haut = haut, parallaxe, recentrage, projections).
+
+## Mesurer les performances
+
+Avec `perf_log=1`, le journal du jeu (`REDRIVER2.log`, à côté de l'exécutable) reçoit toutes les 5 s une ligne `VR: perf`. Pour qu'une mesure soit comparable, la relever dans la même scène (Chicago, vue cockpit, en roulant), avec la même fréquence dans Virtual Desktop.
+
+| Champ | Lecture |
+| --- | --- |
+| `90.0 Hz (11.11 ms)` | Fréquence du casque et budget d'une image. 90 ou 120 Hz tombent juste avec les 30 pas par seconde du jeu ; 72 ou 80 Hz donnent une cadence inégale |
+| `missed` | Images du casque restées sans nouvelle soumission pendant la conduite. Doit rester à 0 : chaque image manquée est une saccade |
+| `game step` | Travail du jeu entre deux pas (simulation, image écran plat, enregistrement). S'il approche du budget d'une image, le casque manque une image à chaque pas |
+| `xrWaitFrame` | Temps d'attente du casque : de la marge. Proche de 0 = on est à la limite |
+| `eyes CPU` / `after step` | Soumission des deux yeux ; `after step` inclut l'envoi des sommets de la nouvelle image |
+| `eyes GPU` | Temps GPU des deux yeux, miroir compris. Au-delà d'environ 85 % du budget, la carte graphique est la limite |
+| `frames/step` | Nombre d'images du casque par pas du jeu. À 90 Hz, presque tout doit être en `3:` |
 
 ## Limites connues
 

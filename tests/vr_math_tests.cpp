@@ -82,6 +82,14 @@ int main() {
     Vec3 r0(clean.m[0][0], clean.m[0][1], clean.m[0][2]), r1(clean.m[1][0], clean.m[1][1], clean.m[1][2]), r2(clean.m[2][0], clean.m[2][1], clean.m[2][2]);
     expect(near(dot(r0, r1), 0) && near(dot(r1, r2), 0) && near(length(r0), 1), "orthonormalRows");
 
+    // Missed headset frames, from consecutive predicted display times (90 Hz period).
+    const long long p90 = 11111111;
+    expect(skippedPeriods(1000, 1000 + p90, p90) == 0, "skippedPeriods on time");
+    expect(skippedPeriods(1000, 1000 + p90 + p90 / 3, p90) == 0, "skippedPeriods jitter");
+    expect(skippedPeriods(1000, 1000 + 2 * p90, p90) == 1, "skippedPeriods one missed");
+    expect(skippedPeriods(1000, 1000 + 4 * p90, p90) == 3, "skippedPeriods three missed");
+    expect(skippedPeriods(0, p90, p90) == 0 && skippedPeriods(1000, 1000, p90) == 0, "skippedPeriods first frame");
+
     std::printf("%d/%d VR maths checks passed\n", checks - failures, checks);
     return failures ? 1 : 0;
 }

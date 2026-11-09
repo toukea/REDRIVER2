@@ -1,5 +1,13 @@
 # Reprise technique et contexte — support sim racing
 
+## Optimisation VR — 9 novembre 2026
+
+Branche `wheel-controller-vr-perf`, issue de `wheel-controller-vr` (même règle de séparation). Plan en 5 phases, chacune mesurée avant la suivante : [VR_PERF_PLAN.md](VR_PERF_PLAN.md). Au casque (Quest 3 + Virtual Desktop, RTX 3060 et 4080 laptop), l'utilisateur constate des saccades régulières et un décor qui défile saccadé.
+
+- Phase 0 faite : `perf_log=1` (`vr.ini`) écrit une ligne `VR: perf` toutes les 5 s (fréquence, images manquées, pas de jeu, attente `xrWaitFrame`, CPU/GPU des yeux, images par pas). Timer queries GL 3.3 chargées via `SDL_GL_GetProcAddress` : le glad de PsyCross s'arrête à GL 3.0. Comptage des images manquées : `vrm::skippedPeriods`, testé dans `tests/vr_math_tests.cpp`.
+- Non validé : écrite sous Linux, sans compilation Windows ni mesure au casque. Prochaine étape : `./build-wheel.ps1`, puis relever les lignes `VR: perf` selon le protocole de VR_SUPPORT.md, avant d'attaquer la phase 1.
+- PsyCross active `GL_DEPTH_TEST` seulement via `GR_EnableDepth` quand `g_cfg_pgxpZBuffer` est vrai : à prendre en compte pour le masque de visibilité (phase 3).
+
 ## Extension réalité virtuelle (OpenXR) — 9 novembre 2026
 
 Branche `wheel-controller-vr`, issue de `codex/persistent-camera-view` (cockpit + vue persistante). Guide utilisateur : [VR_SUPPORT.md](../VR_SUPPORT.md). `VR_OPENXR_ANALYSE.md` reste un fichier non suivi de l'utilisateur.

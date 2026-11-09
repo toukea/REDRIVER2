@@ -67,6 +67,7 @@ struct Config {
     int hideWheel = 0;
     int recenterButton = -1;        // optional wheel button index (see WheelConfig)
     float nearPlane = .03f;
+    int perfLog = 1;                // timing line in the log every 5 s (see Perf)
 } cfg;
 
 std::string iniPath = "vr.ini";
@@ -109,6 +110,7 @@ void loadConfig() {
     cfg.hideWheel = int(readFloat(ini, "hide_wheel", 0, 0, 1));
     cfg.recenterButton = int(readFloat(ini, "recenter_button", -1, -1, 63));
     cfg.nearPlane = readFloat(ini, "near_plane", .03f, .005f, .5f);
+    cfg.perfLog = int(readFloat(ini, "perf_log", 1, 0, 1));
     ini_free(ini);
 }
 
@@ -265,6 +267,68 @@ double simClock = 0, lastTrackedSwap = -10;
 
 struct Stats { int swaps = 0, trackedSwaps = 0, frames = 0, rendered = 0, eyes = 0, failedLocate = 0; double since = 0; } stats;
 
+// Timing (perf_log=1), reset with the statistics every 5 s. All durations in milliseconds.
+struct Timing {
+    double sum = 0, max = 0; int n = 0;
+    void add(double ms) { sum += ms; if (ms > max) max = ms; ++n; }
+    double avg() const { return n ? sum / n : 0; }
+};
+struct Perf {
+    Timing game;        // between two head-tracked swaps: game step, flat draw and recording
+    Timing wait;        // blocked in xrWaitFrame
+    Timing eyesCpu;     // both eyes submitted on the CPU (includes the desktop mirror)
+    Timing firstCpu;    // ... on the first headset frame after a step (includes the vertex upload)
+    Timing eyesGpu;     // both eyes on the GPU (timer queries, read a few frames later)
+    int missed = 0;     // headset frames shown without a new submission
+    int perStep[5] = {};// head-tracked steps that presented 1, 2, 3, 4, 5+ headset frames
+    double periodMs = 0;
+} perf;
+XrTime lastDisplayTime = 0;
+double hookEnd = 0;
+
+// GL_TIME_ELAPSED and glGetQueryObjectui64v are OpenGL 3.3: PsyCross' glad stops at 3.0.
+#ifndef GL_TIME_ELAPSED
+#define GL_TIME_ELAPSED 0x88BF
+#endif
+typedef void (APIENTRY* PFN_GetQueryObjectui64v)(GLuint id, GLenum pname, unsigned long long* params);
+PFN_GetQueryObjectui64v getQueryObjectui64v = nullptr;
+const int kGpuQueries = 4;
+GLuint gpuQueries[kGpuQueries] = {};
+bool gpuPending[kGpuQueries] = {};
+int gpuNext = 0, gpuTimer = -1;   // -1 unknown, 0 unavailable, 1 ready
+
+bool gpuTimerReady() {
+    if (gpuTimer < 0) {
+        GLint major = 0, minor = 0; glGetIntegerv(GL_MAJOR_VERSION, &major); glGetIntegerv(GL_MINOR_VERSION, &minor);
+        if (major * 10 + minor >= 33) getQueryObjectui64v = (PFN_GetQueryObjectui64v)SDL_GL_GetProcAddress("glGetQueryObjectui64v");
+        gpuTimer = getQueryObjectui64v ? 1 : 0;
+        if (gpuTimer) glGenQueries(kGpuQueries, gpuQueries);
+        else logInfo("GPU timer queries unavailable (OpenGL %d.%d)", major, minor);
+    }
+    return gpuTimer == 1;
+}
+
+// Collects finished GPU timings without waiting for the GPU.
+void readGpuQueries() {
+    if (gpuTimer != 1) return;
+    for (int i = 0; i < kGpuQueries; ++i) {
+        if (!gpuPending[i]) continue;
+        GLint available = 0;
+        glGetQueryObjectiv(gpuQueries[i], GL_QUERY_RESULT_AVAILABLE, &available);
+        if (!available) continue;
+        unsigned long long ns = 0;
+        getQueryObjectui64v(gpuQueries[i], GL_QUERY_RESULT, &ns);
+        perf.eyesGpu.add(double(ns) * 1e-6);
+        gpuPending[i] = false;
+    }
+}
+
+void destroyGpuQueries() {
+    if (gpuTimer == 1) glDeleteQueries(kGpuQueries, gpuQueries);
+    for (int i = 0; i < kGpuQueries; ++i) { gpuQueries[i] = 0; gpuPending[i] = false; }
+    gpuTimer = -1; gpuNext = 0;
+}
+
 bool mapValid = false; float mapRect[4]; vrm::Vec3 mapCentre, mapRight, mapUp;
 float frameMapRect[4]; vrm::Vec3 frameMapCentre, frameMapRight, frameMapUp; bool frameMapValid = false;
 
@@ -348,6 +412,8 @@ void destroySession() {
     destroyTarget(cinema);
     if (cinemaCopyFbo) { glDeleteFramebuffers(1, &cinemaCopyFbo); cinemaCopyFbo = 0; }
     if (cinemaCopy) { glDeleteTextures(1, &cinemaCopy); cinemaCopy = 0; }
+    destroyGpuQueries();
+    lastDisplayTime = 0; hookEnd = 0;
     if (viewSpace != XR_NULL_HANDLE) xrDestroySpace_(viewSpace);
     if (localSpace != XR_NULL_HANDLE) xrDestroySpace_(localSpace);
     if (session != XR_NULL_HANDLE) xrDestroySession_(session);
@@ -544,10 +610,22 @@ bool drawCinema(XrCompositionLayerQuad& quad) {
     return true;
 }
 
-void renderFrame(bool showTracked, XrTime& displayTime, XrDuration& period) {
+void renderFrame(bool showTracked, bool firstOfStep, XrTime& displayTime, XrDuration& period) {
     XrFrameWaitInfo wi = {XR_TYPE_FRAME_WAIT_INFO};
     XrFrameState fs = {XR_TYPE_FRAME_STATE};
+    double waitStart = seconds();
     if (XR_FAILED(xrWaitFrame_(session, &wi, &fs))) return;
+    if (cfg.perfLog) {
+        perf.wait.add((seconds() - waitStart) * 1e3);
+        if (fs.predictedDisplayPeriod > 0) perf.periodMs = double(fs.predictedDisplayPeriod) * 1e-6;
+        // Menus and the cinema screen are paced by the game itself: count only head-tracked runs.
+        static bool lastWasTracked = false;
+        if (showTracked && lastWasTracked)
+            perf.missed += vrm::skippedPeriods(lastDisplayTime, fs.predictedDisplayTime, fs.predictedDisplayPeriod);
+        lastWasTracked = showTracked;
+        lastDisplayTime = fs.predictedDisplayTime;
+        readGpuQueries();
+    }
     XrFrameBeginInfo bi = {XR_TYPE_FRAME_BEGIN_INFO};
     if (XR_FAILED(xrBeginFrame_(session, &bi))) return;
     displayTime = fs.predictedDisplayTime; period = fs.predictedDisplayPeriod;
@@ -579,12 +657,24 @@ void renderFrame(bool showTracked, XrTime& displayTime, XrDuration& period) {
             if (XR_SUCCEEDED(xrLocateViews_(session, &li, &vs, 2, &count, views)) && count == 2 &&
                 (vs.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT)) {
                 stats.eyes++;
+                double eyesStart = seconds();
+                int query = -1;
+                if (cfg.perfLog && gpuTimerReady() && !gpuPending[gpuNext]) {
+                    query = gpuNext; gpuNext = (gpuNext + 1) % kGpuQueries;
+                    glBeginQuery(GL_TIME_ELAPSED, gpuQueries[query]);
+                }
                 for (int i = 0; i < 2; ++i) {
                     drawEye(i, views[i]);
                     projViews[i].pose = views[i].pose;
                     projViews[i].fov = views[i].fov;
                     projViews[i].subImage.swapchain = eyes[i].swapchain;
                     projViews[i].subImage.imageRect = {{0, 0}, {eyes[i].width, eyes[i].height}};
+                }
+                if (query >= 0) { glEndQuery(GL_TIME_ELAPSED); gpuPending[query] = true; }
+                if (cfg.perfLog) {
+                    double ms = (seconds() - eyesStart) * 1e3;
+                    perf.eyesCpu.add(ms);
+                    if (firstOfStep) perf.firstCpu.add(ms);
                 }
                 GR_VR_SetPassUniforms(0, nullptr, nullptr);
                 projection.space = localSpace;
@@ -708,11 +798,15 @@ void swapHook() {
     GR_VR_SetSpriteDepth(0);
     if (!running) return;
 
+    double hookStart = seconds();
+    bool previousTracked = trackedShown;
     if (!showTracked || GR_VR_RecordedVertices(1) == 0) {
         showTracked = false;
         copyWindowForCinema();
     } else lastTrackedSwap = seconds();
     trackedShown = showTracked;
+    // Game work since the previous swap: only meaningful between two head-tracked steps.
+    if (cfg.perfLog && showTracked && previousTracked && hookEnd > 0) perf.game.add((hookStart - hookEnd) * 1e3);
 
     // One simulation step lasts 1/30 s: present as many headset frames as fit before the next one.
     double now = seconds();
@@ -720,26 +814,39 @@ void swapHook() {
         simClock += 1.0 / 30.0;
         if (simClock < now - .1 || simClock > now + .2) simClock = now + 1.0 / 30.0;
     }
+    int presented = 0;
     for (int frame = 0; frame < 8 && running; ++frame) {
         XrTime displayTime = 0; XrDuration period = 0;
         double before = seconds();
-        renderFrame(showTracked, displayTime, period);
+        renderFrame(showTracked, frame == 0, displayTime, period);
+        ++presented;
         if (!showTracked) break;
         double p = period > 0 ? double(period) * 1e-9 : 1.0 / 90.0;
         if (before + p >= simClock) break;
         pollEvents();
     }
+    if (cfg.perfLog && showTracked) perf.perStep[std::min(presented, 5) - 1]++;
     pacedSwap = showTracked;
     stats.swaps++; if (showTracked) stats.trackedSwaps++;
     if (seconds() - stats.since > 5) {
         logInfo("%d swaps (%d head-tracked), %d headset frames, %d rendered, %d stereo, %d locate failures, %d world / %d 2D vertices",
             stats.swaps, stats.trackedSwaps, stats.frames, stats.rendered, stats.eyes, stats.failedLocate,
             GR_VR_RecordedVertices(1), GR_VR_RecordedVertices(0));
+        if (cfg.perfLog)
+            logInfo("perf %.1f Hz (%.2f ms) | missed %d | game step %.2f avg %.2f max | xrWaitFrame %.2f avg | "
+                "eyes CPU %.2f avg %.2f max (after step %.2f) | eyes GPU %.2f avg %.2f max | frames/step 1:%d 2:%d 3:%d 4:%d 5+:%d",
+                perf.periodMs > 0 ? 1000.0 / perf.periodMs : 0.0, perf.periodMs, perf.missed,
+                perf.game.avg(), perf.game.max, perf.wait.avg(),
+                perf.eyesCpu.avg(), perf.eyesCpu.max, perf.firstCpu.avg(),
+                perf.eyesGpu.avg(), perf.eyesGpu.max,
+                perf.perStep[0], perf.perStep[1], perf.perStep[2], perf.perStep[3], perf.perStep[4]);
         stats = Stats(); stats.since = seconds();
+        perf = Perf();
     }
     GR_VR_InvalidateCaches();
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, g_windowWidth, g_windowHeight);
+    hookEnd = seconds();
 #endif
 }
 
