@@ -93,5 +93,18 @@ int main(){
     require(Wheel_ReplaySave(file,base,sizeof(base)),"write invalid visual metadata fixture");
     require(!Wheel_ReplayLoad(file,base,sizeof(base)),"corrupt cockpit rotation is rejected on load");
     remove("src_rebuild/bin/tests/wheel-test.D2RP.wheel");
+    // Chase missions: the wheel must get the pad's rubber banding back.
+    NoPlayerControl=0;connected=true;testInput=racing::Input();testInput.gear=3;testInput.clutch=0;testInput.throttle=1;
+    cp->hd.wheel_speed=int(25/.3f*4096);cp->hd.where.t[0]=cp->hd.where.t[2]=0;
+    auto settle=[&](){for(int i=0;i<30;++i)Wheel_GameApply(cp);return int(cp->thrust);};
+    MainPlayer.targetCarId=-1;const int free=settle();
+    require(free>FIXEDH(4096*4915),"third gear pulls harder than Driver's constant thrust");
+    CAR_COSMETICS fast={};fast.powerRatio=5000;fast.traction=4096;
+    car_data[1].id=1;car_data[1].ap.carCos=&fast;car_data[1].hd.where.t[0]=8<<10;car_data[1].hd.where.t[2]=0;
+    MainPlayer.targetCarId=1;const int far=settle();
+    require(far>free*5000/4096,"far behind the target: its power plus the 14 percent catch-up");
+    car_data[1].hd.where.t[0]=2<<10;const int close=settle();
+    require(close<far && close>free,"right behind the target: banding eases off like the pad");
+    MainPlayer.targetCarId=-1;
     printf("PASS: %d game integration and replay checks\n",tests);
 }

@@ -22,6 +22,7 @@ int main(){
     check(box.out.gear==1 && box.out.drive==0 && box.out.rpm>5000,"clutch disconnects engine");
     input.clutch=0;box.step(input,0,1.f/30,cfg);
     check(box.out.drive>0 && box.out.burnout,"first gear burnout on release");
+    for(int i=0;i<15;++i)box.step(input,5,1.f/30,cfg);
     input.gear=2;box.step(input,5,1.f/30,cfg);
     check(box.out.gear==1 && box.out.rejectedShift,"manual shift needs clutch");
     input.clutch=1;box.step(input,5,1.f/30,cfg);check(box.out.gear==2,"shift after depressing clutch");
@@ -48,10 +49,40 @@ int main(){
     box.step(input,30,1.f/30,cfg);check(!box.out.burnout,"cutoff does not oscillate back into burnout");
     input.throttle=0;box.step(input,0,1.f/30,cfg);input.throttle=1;box.step(input,0,1.f/30,cfg);
     check(box.out.burnout,"lifting throttle rearms burnout");
-    for(int gear=3;gear<=5;++gear){box.reset();input.gear=gear;
-        float speeds[]={0,0,0,25,40,60};
-        for(int i=0;i<90;++i)box.step(input,speeds[gear],1.f/30,cfg);
-        check(box.out.drive>.99f,"high gear preserves stock propulsion in operating range");
+    // Gearing derived from the car's native top speed (61 m/s for powerRatio 4096).
+    {
+        const float top=61;Setup g;g.assisted=false;g.burnout=false;Input in;in.clutch=0;in.throttle=1;
+        auto run=[&](int gear,float v,Input i2){Transmission t;const float c=i2.clutch;i2.gear=gear;i2.clutch=1;t.step(i2,v,1.f/30,g,top);i2.clutch=c;
+            for(int i=0;i<60;++i)t.step(i2,v,1.f/30,g,top);return t.out;};
+        Output fifth=run(5,top,in);
+        check(std::fabs(fifth.drive-1)<.02f,"top gear gives exactly native thrust at native top speed");
+        check(fifth.rpm<g.redline*.9f,"top gear reaches native top speed well below the limiter");
+        check(run(5,top*1.1f,in).drive>.8f,"no limiter cut just above native top speed (chase banding)");
+        check(run(4,top*.8f,in).drive>run(5,top*.8f,in).drive,"fourth pulls harder than fifth");
+        check(run(3,top*.5f,in).drive>1.2f,"third gear multiplies Driver's thrust");
+        check(run(1,5,in).drive>run(2,5,in).drive && run(2,15,in).drive>run(3,15,in).drive,"each lower gear pulls harder at equal speed");
+        float last=10;bool smooth=true;
+        for(float v=10;v<36;v+=.25f){float d=run(2,v,in).drive;if(d>last+.05f)smooth=false;last=d;}
+        check(smooth && last<.05f,"soft limiter fades second gear without surges");
+        check(run(2,top*.49f,in).shiftUp && !run(2,top*.2f,in).shiftUp,"upshift hint only near the top of second");
+        check(!run(5,top,in).shiftUp,"no upshift hint in top gear");
+        Input slightly=in;slightly.clutch=.2f;
+        check(std::fabs(run(3,30,slightly).drive-run(3,30,in).drive)<.001f,"resting foot on the clutch costs nothing");
+        Input bite=in;bite.clutch=g.bite;check(run(3,30,bite).drive==0,"clutch fully disengaged at the bite point");
+        Setup flat=g;flat.gearTorque=0;Transmission t;Input i2=in;i2.gear=2;i2.clutch=1;t.step(i2,20,1.f/30,flat,top);i2.clutch=0;
+        for(int i=0;i<60;++i)t.step(i2,20,1.f/30,flat,top);
+        check(t.out.drive<1.1f,"gear_torque=0 restores Driver's constant thrust");
+        // Quick H-pattern shift: the lever reaches the gate as the pedal comes up.
+        Transmission q;Input s=in;s.gear=2;s.clutch=1;q.step(s,15,1.f/30,g,top);s.clutch=0;q.step(s,15,1.f/30,g,top);
+        s.gear=0;for(int i=0;i<3;++i)q.step(s,15,1.f/30,g,top);s.gear=3;s.clutch=.1f;
+        for(int i=0;i<3;++i)q.step(s,15,1.f/30,g,top);
+        check(q.out.gear==3 && !q.out.rejectedShift,"fast shift accepted with the clutch already rising");
+        s.gear=0;q.step(s,15,1.f/30,g,top);for(int i=0;i<20;++i)q.step(s,15,1.f/30,g,top);s.gear=4;q.step(s,15,1.f/30,g,top);
+        check(q.out.gear==0 && q.out.rejectedShift,"shift long after the clutch was released is refused");
+        // Flooring it in first after the burnout never gives less than X.
+        Setup b=g;b.assisted=true;b.burnout=true;Transmission l;Input f=in;f.gear=1;
+        for(int i=0;i<60;++i)l.step(f,34,1.f/30,b,top);
+        check(!l.out.burnout && l.out.drive>=.99f,"first after burnout keeps native acceleration");
     }
     input.throttle=0;box.step(input,60,1.f/30,cfg);check(box.out.engineBrake>0,"engine braking remains off throttle");
     // Force feedback: tyre torque, soft clipping, dead band and passive effects.

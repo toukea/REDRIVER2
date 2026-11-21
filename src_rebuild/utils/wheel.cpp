@@ -285,6 +285,10 @@ void Wheel_LoadConfig(const char* path) {
     readFloat("idle_rpm",t.idle); t.idle=racing::clamp(t.idle,600,1500);
     readFloat("redline_rpm",t.redline); t.redline=racing::clamp(t.redline,3000,10000);
     for(int i=0;i<6;++i){ char key[32]; snprintf(key,sizeof(key),"ratio%d",i); readFloat(key,t.ratios[i]); t.ratios[i]=racing::clamp(t.ratios[i],.3f,6); }
+    int autoGearing=t.autoGearing; readInt("auto_gearing",autoGearing); t.autoGearing=autoGearing!=0;
+    readFloat("gear_torque",t.gearTorque); t.gearTorque=racing::clamp(t.gearTorque,0,1);
+    readFloat("clutch_window",t.clutchWindow); t.clutchWindow=racing::clamp(t.clutchWindow,.05f,.6f);
+    readFloat("shift_window",t.shiftWindow); t.shiftWindow=racing::clamp(t.shiftWindow,0,1);
     ini_free(cfg);
 }
 bool Wheel_SaveConfig(const char* path) {
@@ -309,6 +313,7 @@ bool Wheel_SaveConfig(const char* path) {
     const auto& t=g_wheelSettings.transmission;
     fprintf(f,"assisted_clutch=%d\ndriver_burnout=%d\nclutch_bite=%g\nfinal_drive=%g\ntyre_radius=%g\nidle_rpm=%g\nredline_rpm=%g\n",t.assisted,t.burnout,t.bite,t.finalDrive,t.tyreRadius,t.idle,t.redline);
     for(int i=0;i<6;++i) fprintf(f,"ratio%d=%g\n",i,t.ratios[i]);
+    fprintf(f,"auto_gearing=%d\ngear_torque=%g\nclutch_window=%g\nshift_window=%g\n",t.autoGearing,t.gearTorque,t.clutchWindow,t.shiftWindow);
     bool ok=!ferror(f); if(fclose(f)) ok=false;
     if(!ok) return false;
     // SDL's portable file API has no atomic replacement; retain a recoverable backup.

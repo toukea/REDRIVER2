@@ -25,7 +25,7 @@ struct Frame {
     int32_t frame=0, car=-1;
     int16_t steer=0, thrust=0, rpm=0, gear=0;
     uint16_t throttle=0, brake=0, clutch=0, handbrake=0;
-    uint16_t flags=0; // 1 active, 2 burnout, 4 stalled, 8 rejected shift, 16 handbrake, 32 visual angle
+    uint16_t flags=0; // 1 active, 2 burnout, 4 stalled, 8 rejected shift, 16 handbrake, 32 visual angle, 64 upshift hint
     int16_t steeringDegrees=0; // tenths of a degree, valid with flag 32; old v2 reserved=0
 };
 static_assert(sizeof(Frame)==28,"Wheel replay layout must be stable");
@@ -49,6 +49,26 @@ unsigned checksum(const void* data,int size) {
     for(int i=0;i<size;++i)hash=(hash^p[i])*16777619u;return hash;
 }
 bool validCar(const CAR_DATA* cp){return cp && cp->id>=0 && cp->id<MAX_CARS;}
+// Accelerator thrust exactly as handling.c computes it for a pad player
+// (CAR_PAD_ACCEL), including the chase rubber banding: the player gets the
+// target's power when his own is above 3050, then +14 % far behind, +6 % at mid
+// range and -4 % right behind. Wheel_GameApply overwrites cp->thrust after that
+// code, so a wheel driver used to lose this help in every chase mission.
+int nativeThrust(const CAR_DATA* cp,bool distanceBanding){
+    int thrust=FIXEDH(cp->ap.carCos->powerRatio*4915);
+    const int targetId=MainPlayer.playerCarId==cp->id?MainPlayer.targetCarId:-1;
+    if(targetId<0 || targetId>=MAX_CARS+2 || targetId==cp->id)return thrust;
+    const CAR_DATA* tp=&car_data[targetId];
+    if(3050<cp->ap.carCos->powerRatio && tp->ap.carCos)thrust=FIXEDH(tp->ap.carCos->powerRatio*4915);
+    if(!distanceBanding)return thrust;
+    const int cx=(cp->hd.where.t[0]-tp->hd.where.t[0])>>10;
+    const int cz=(cp->hd.where.t[2]-tp->hd.where.t[2])>>10;
+    const int d=cx*cx+cz*cz;
+    return d>20?thrust*8000/7000:d>6?thrust*7400/7000:thrust*6700/7000;
+}
+// Speed (model m/s) at which that thrust balances Driver's drag: each rear
+// wheel pushes 4096 x thrust, each of the four contacts brakes 12 x velocity.
+float nativeTopSpeed(int thrust){return 2*4096.f*thrust/(4*12)/4096.f*.3f;}
 void apply(CAR_DATA* cp,const Frame& f){
     cp->wheel_angle=f.steer;cp->thrust=f.thrust;cp->hd.autoBrake=0;
     cp->handbrake=(f.flags&16)!=0;
@@ -84,17 +104,23 @@ void Wheel_GameApply(CAR_DATA* cp){
     // Driver units are approximately centimetres, velocities are units per frame.
     float speedMS=cp->hd.wheel_speed/4096.f*.3f;
     auto& transmission=transmissions[cp->id];
-    auto output=transmission.step(input,speedMS,1.f/30,g_wheelSettings.transmission);
+    // Gearing follows the car's own top speed (without the distance banding,
+    // which changes every frame and would make the revs jump).
+    const float topSpeed=nativeTopSpeed(nativeThrust(cp,false));
+    auto output=transmission.step(input,speedMS,1.f/30,g_wheelSettings.transmission,topSpeed);
     f=Frame();f.frame=CameraCnt;f.car=cp->id;
     f.steer=static_cast<int16_t>(input.steering*racing::clamp(g_wheelSettings.steeringLock,10,45)*4096/360);
     float drive=output.drive;
     if(std::fabs(speedMS)>.2f)drive-=output.engineBrake*(speedMS>0?1:-1);
-    f.thrust=static_cast<int16_t>(racing::clamp(cp->ap.carCos->powerRatio/4096.f*4915*drive,-15000,15000));
+    // Forward drive scales the pad's X thrust, chase banding included. Engine
+    // braking and reverse keep the car's own power.
+    const float thrustUnit=drive>0?float(nativeThrust(cp,true)):cp->ap.carCos->powerRatio/4096.f*4915;
+    f.thrust=static_cast<int16_t>(racing::clamp(thrustUnit*drive,-15000,15000));
     f.rpm=static_cast<int16_t>(racing::clamp(output.rpm/6500*30000,0,32000));
     f.gear=output.gear;
     f.throttle=static_cast<uint16_t>(input.throttle*65535);f.brake=static_cast<uint16_t>(input.brake*65535);
     f.clutch=static_cast<uint16_t>(input.clutch*65535);f.handbrake=static_cast<uint16_t>(input.handbrake*65535);
-    f.flags=1|(output.burnout?2:0)|(output.stalled?4:0)|(output.rejectedShift?8:0);
+    f.flags=1|(output.burnout?2:0)|(output.stalled?4:0)|(output.rejectedShift?8:0)|(output.shiftUp?64:0);
     f.steeringDegrees=static_cast<int16_t>(std::lround(input.steering*racing::clamp(g_wheelSettings.rotation,180,2520)*5));
     f.flags|=32;
     if(wasHandbrake ? input.handbrake>g_wheelSettings.handbrakeOff : input.handbrake>=g_wheelSettings.handbrakeOn) f.flags|=16;
@@ -157,7 +183,7 @@ void Wheel_GameHUD(){
     int id=MainPlayer.playerCarId;if(id<0 || id>=MAX_CARS || !Wheel_GameActive(&car_data[id]))return;
     const Frame& f=state[id];char label[80];char gear[8];
     if(f.gear<0)strcpy(gear,"R");else if(!f.gear)strcpy(gear,"N");else snprintf(gear,sizeof(gear),"%d",f.gear);
-    snprintf(label,sizeof(label),"%s  %d RPM%s",gear,int(f.rpm*6500/30000),(f.flags&4)?" STALLED":(f.flags&8)?" CLUTCH!":"");
+    snprintf(label,sizeof(label),"%s  %d RPM%s",gear,int(f.rpm*6500/30000),(f.flags&4)?" STALLED":(f.flags&8)?" CLUTCH!":(f.flags&64)?"  SHIFT":"");
     PrintString(label,16,SCREEN_H-28);
     if(g_wheelSettings.ffbHud){
         // Tuning aid: output level, front tyre slip (100 = grip limit), clipping.

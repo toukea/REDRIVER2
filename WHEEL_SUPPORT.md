@@ -60,6 +60,16 @@ Le volant, les pédales, le shifter et le frein à main peuvent appartenir à de
 - Le burnout Driver s'active en première, à plus de 97 % d'accélérateur, à faible vitesse et lorsque l'embrayage transmet du couple. Débrayé à fond, le moteur monte seul en régime. `driver_burnout=0` désactive cette assistance arcade.
 - Le HUD affiche le rapport engagé, le régime et le calage. Les quatre boutons de face, les premières commandes auxiliaires et la croix directionnelle disposent d'une correspondance de manette standard. Le clavier reste disponible pour les menus et le personnage à pied ; la conduite au volant vise le joueur 1.
 
+## Boîte de vitesses v2 (branche `wheel-controller-gearbox`)
+
+- L'étagement s'adapte à chaque voiture : la cinquième atteint la vitesse de pointe d'origine sans buter sur le limiteur (`auto_gearing=1`).
+- Les rapports inférieurs multiplient la poussée Driver (environ ×1,9 en première, ×1,3 en troisième) ; la cinquième garde exactement la poussée d'origine à la vitesse de pointe. `gear_torque` règle cette multiplication (0 = poussée constante d'origine).
+- En poursuite, le volant reçoit à nouveau l'aide de rattrapage du jeu d'origine (puissance de la cible, jusqu'à +14 % quand elle s'éloigne).
+- Passages rapides : le rapport est accepté si l'embrayage a dépassé le point de patinage dans les 0,35 s précédentes (`shift_window`). Sous 35 % de course (`clutch_bite − clutch_window`), l'embrayage transmet tout.
+- Le HUD affiche `SHIFT` quand il faut monter le rapport. Le limiteur est progressif.
+
+Détails techniques et limites : [docs/GEARBOX.md](docs/GEARBOX.md).
+
 ## Retour de force (modèle v2, branche `wheel-controller-ffb`)
 
 Le couple ressenti est calculé à partir des pneus avant du moteur physique de Driver 2, comme dans les simulateurs actuels, et non à partir d'un ressort de rappel synthétique.
