@@ -22,6 +22,9 @@
 #include "convert.h"
 #include "glaunch.h"
 #include "ASM/rndrasm.h"
+#ifndef PSX
+#include "cockpit.h"
+#endif
 
 struct plotCarGlobals
 {
@@ -1400,6 +1403,35 @@ void DrawCarObject(CAR_MODEL* car, MATRIX* matrix, VECTOR* pos, int palette, CAR
 }
 
 // [D] [T] [A]
+#ifndef PSX
+// [A] Cockpit view: the bonnet ahead of the windscreen, from the car's own model so it
+// keeps its paint (palette) and its dents. The rest of the body stays hidden.
+static void DrawCockpitHood(CAR_DATA* cp)
+{
+	CAR_MODEL hood;
+	VECTOR pos;
+	MATRIX workmatrix;
+
+	if (!Cockpit_HoodModel(cp, &hood))
+		return;
+
+	hood.vlist = gTempCarVertDump[cp->id];
+	hood.nlist = gTempCarVertDump[cp->id];
+
+	pos.vx = cp->hd.where.t[0] - camera_position.vx;
+	pos.vy = -cp->hd.where.t[1] - camera_position.vy;
+	pos.vz = cp->hd.where.t[2] - camera_position.vz;
+
+	Apply_Inv_CameraMatrix(&pos);
+	MulMatrix0(&inv_camera_matrix, &cp->hd.drawCarMat, &workmatrix);
+
+	ComputeCarLightingLevels(cp, 1);
+	gTempCarUVPtr = gTempHDCarUVDump[cp->id];
+
+	DrawCarObject(&hood, &workmatrix, &pos, cp->ap.palette, cp, 1);
+}
+#endif
+
 void DrawCar(CAR_DATA* cp, int view)
 {
 	int yVal;
@@ -1421,6 +1453,11 @@ void DrawCar(CAR_DATA* cp, int view)
 	// draw car lights in for InCar camera
 	if (CameraViewIsInside(player[view].cameraView) && cp->id == player[view].cameraCarId)
 	{
+#ifndef PSX
+		if (player[view].cameraView == CAMERA_VIEW_COCKPIT)
+			DrawCockpitHood(cp);
+#endif
+
 		if (cp->ap.damage[0] < 500)
 			LeftLight = 2;
 		else if (cp->ap.damage[0] < 1000)

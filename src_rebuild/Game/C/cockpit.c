@@ -39,6 +39,7 @@ bool usedBuckets[OTSIZE];int bucketCount=0;
 float nearClip=32;                 // GTE units; smaller in VR where the head can lean close to the dash
 float vrMapRect[4];bool vrMapRequested=false;
 struct FitCache { MODEL* model=nullptr;int id=-2,level=-1;cockpit::Profile p={}; } fitCache[MAX_CAR_RESIDENT_MODELS];
+struct HoodCache { const CAR_POLY* source=nullptr;int count=0;float start=0,top=0;std::vector<CAR_POLY> polys; } hoodCache[MAX_CAR_RESIDENT_MODELS];
 float number(const char* section,const char* key,float fallback,float lo,float hi) {
     const char* s=config?ini_get(config,section,key):nullptr;
     if(!s)return fallback;
@@ -209,6 +210,41 @@ float Cockpit_UnitsPerMetre(const CAR_DATA* car) {
     const auto& box=car->ap.carCos->colBox;
     char section[64];snprintf(section,sizeof(section),"%s.%d",LevelNames[GameLevel],modelId(car));
     return cockpit::place(in->data,p,float(box.vx),float(box.vz),number(section,"interior_scale",0,0,400)).scale;
+}
+bool Cockpit_HoodModel(const CAR_DATA* car,CAR_MODEL* out) {
+    if(!enabled || !car || !car->ap.carCos || !out)return false;
+    int slot=car->ap.model;
+    if(slot<0 || slot>=MAX_CAR_RESIDENT_MODELS)return false;
+    const CAR_MODEL& source=NewCarModel[slot];MODEL* clean=gCarCleanModelPtr[slot];
+    if(!clean || !source.pGT3 || source.numGT3<=0 || clean->num_vertices<=0 || clean->num_vertices>MAX_DENTING_VERTS)return false;
+    auto p=Cockpit_Profile(car);
+    char section[64];snprintf(section,sizeof(section),"%s.%d",LevelNames[GameLevel],modelId(car));
+    // Cab-over trucks have no bonnet in view: off for the truck family unless asked.
+    float fallback=p.family==cockpit::Truck?number("cockpit","hood_truck",0,0,1):number("cockpit","hood",1,0,1);
+    if(number(section,"hood",fallback,0,1)==0)return false;
+    // Cockpit space is the model negated. Keep triangles wholly ahead of the top of the
+    // windscreen (so the glass and pillars stay out) and below the eyes.
+    float start=p.roofFront+number(section,"hood_start",number("cockpit","hood_start",10,-100,200),-100,200);
+    float top=p.eye.y-number(section,"hood_below_eye",number("cockpit","hood_below_eye",4,-40,80),-40,80);
+    auto& cache=hoodCache[slot];
+    if(cache.source!=source.pGT3 || cache.count!=source.numGT3 || cache.start!=start || cache.top!=top) {
+        cache.source=source.pGT3;cache.count=source.numGT3;cache.start=start;cache.top=top;cache.polys.clear();
+        const SVECTOR* verts=GET_MODEL_DATA(SVECTOR,clean,vertices);
+        for(int i=0;i<source.numGT3;++i) {
+            const CAR_POLY& poly=source.pGT3[i];bool keep=true;
+            for(int k=0;k<3 && keep;++k) {
+                int index=(poly.vindices>>(8*k))&0xff;
+                if(index>=clean->num_vertices){keep=false;break;}
+                keep=-verts[index].vz>=start && -verts[index].vy<=top;
+            }
+            if(keep)cache.polys.push_back(poly);
+        }
+        printInfo("Cockpit hood %s: %d of %d body triangles (from z=%.0f, below y=%.0f)\n",section,int(cache.polys.size()),source.numGT3,start,top);
+    }
+    if(cache.polys.empty())return false;
+    *out={};
+    out->numGT3=int(cache.polys.size());out->pGT3=cache.polys.data();
+    return true;
 }
 void Cockpit_SetVRMapRect(const float rect[4]) {memcpy(vrMapRect,rect,sizeof(vrMapRect));vrMapRequested=true;}
 void Cockpit_EyeOffset(const CAR_DATA* car,VECTOR* offset) {
