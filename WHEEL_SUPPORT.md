@@ -44,7 +44,7 @@ Utiliser les lanceurs à la racine garantit que les réglages sont lus et enregi
 
 `hardware_rotation` doit correspondre à la plage réellement configurée dans le pilote. `rotation` détermine la plage utilisée en jeu, et `steering_lock` le braquage maximal des roues, en degrés par côté. À plage identique, la relation est linéaire entre les deux butées. Une plage de jeu plus courte ajoute une butée logicielle, dans la limite de l'intensité disponible. L'outil ne modifie pas le pilote du volant.
 
-Chaque clé de `wheel.ini` est précédée d'un commentaire (ligne commençant par `#`) qui donne son rôle, sa plage et le sens d'un réglage. WheelConfig réécrit ces commentaires à chaque sauvegarde, en gardant les valeurs.
+Chaque clé de `wheel.ini` est précédée d'un commentaire (ligne commençant par `;`) qui donne son rôle, sa plage et le sens d'un réglage. WheelConfig réécrit ces commentaires à chaque sauvegarde, en gardant les valeurs.
 
 Le fichier permet aussi de régler la zone morte (`*_deadzone`), la courbe (`*_gamma`), les minima/centres/maxima, le sens du retour de force (`ffb_invert`), son filtrage, les rapports de boîte et le point de patinage.
 

@@ -122,7 +122,6 @@ static void split_data(ini_t *ini) {
         break;
 
       case ';':
-      case '#': /* REDRIVER2: also accept # comments */
         p = discard_line(ini, p);
         break;
 
