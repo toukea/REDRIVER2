@@ -84,6 +84,11 @@ int main() {
 
     // Missed headset frames, from consecutive predicted display times (90 Hz period).
     const long long p90 = 11111111;
+    expect(!yieldToSimulation(1.0, 1.033333, 1.0/90, .005), "frame fits before simulation deadline");
+    expect(yieldToSimulation(1.012, 1.033333, 1.0/90, .012), "reserve game step before another headset frame");
+    expect(yieldToSimulation(1.03, 1.033333, 1.0/80, .005), "yield after blocking frame wait");
+    expect(yieldToSimulation(1.04, 1.033333, 1.0/90, .005), "late simulation catches up");
+    expect(!yieldToSimulation(1.0, 1.04, 1.0/90, .250), "loading spike budget is bounded");
     expect(skippedPeriods(1000, 1000 + p90, p90) == 0, "skippedPeriods on time");
     expect(skippedPeriods(1000, 1000 + p90 + p90 / 3, p90) == 0, "skippedPeriods jitter");
     expect(skippedPeriods(1000, 1000 + 2 * p90, p90) == 1, "skippedPeriods one missed");

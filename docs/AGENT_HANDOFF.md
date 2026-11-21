@@ -10,6 +10,8 @@ Branche `wheel-controller-vr-perf`, issue de `wheel-controller-vr` (même règle
 
 ## Extension réalité virtuelle (OpenXR) — 9 novembre 2026
 
+Passe saccades sur `wheel-controller-vr-perf` : voir `docs/VR_PERF_PLAN.md` pour mesures avant correction. Phase 1 partielle ajoutée dans le patch PsyCross (skip flat avec conservation render-to-VRAM, VBO orphaning), `vr_openxr.cpp` (budget pas de jeu, décision après attente casque), `vr_math.h`/tests. Release Windows compilé, 575 contrôles passent ; gain casque non mesuré. Préserver les modifications VR locales et la sauvegarde stash `5e571b09` créée lors du changement de branche. Aucun changement à la physique 30 Hz, aux réglages G29 ni à la résolution.
+
 Branche `wheel-controller-vr`, issue de `codex/persistent-camera-view` (cockpit + vue persistante). Guide utilisateur : [VR_SUPPORT.md](../VR_SUPPORT.md). `VR_OPENXR_ANALYSE.md` reste un fichier non suivi de l'utilisateur.
 
 - Le jeu reste **Win32** : le PC de l'utilisateur fournit des runtimes OpenXR 32 bits (Virtual Desktop actif, Meta). Aucun SDK binaire : en-têtes Khronos dans `src_rebuild/utils/openxr/` (Apache-2.0 OR MIT), runtime trouvé via `XR_RUNTIME_JSON` puis la valeur de registre `ActiveRuntime`, négocié par `xrNegotiateLoaderRuntimeInterface` ; un `openxr_loader.dll` local est prioritaire.

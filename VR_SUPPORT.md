@@ -55,6 +55,8 @@ La fenêtre du PC montre l'œil gauche (recadré) pendant la conduite et le jeu 
 
 ## Mesurer les performances
 
+La passe du 9 novembre évite le dessin écran plat redondant en suivi de tête, conserve les mises à jour de textures VRAM et réserve du temps au pas de jeu dans la boucle casque. Le tampon des sommets VR est renouvelé sans attendre son utilisation précédente par le GPU. Ces changements compilent, mais leur gain doit être mesuré au casque. Le journal de référence de cette session montre 80 Hz, des pas de jeu autour de 11,7 ms et un rendu GPU stéréo autour de 2,4 ms : baisser la résolution n'est pas le premier correctif indiqué par ces mesures. Pour comparer la cadence avec les 30 pas/s, essayer 90 Hz dans Virtual Desktop avec la même scène et contrôler de nouveau les images manquées ; ce changement ne garantit pas à lui seul leur disparition.
+
 Avec `perf_log=1`, le journal du jeu (`REDRIVER2.log`, à côté de l'exécutable) reçoit toutes les 5 s une ligne `VR: perf`. Pour qu'une mesure soit comparable, la relever dans la même scène (Chicago, vue cockpit, en roulant), avec la même fréquence dans Virtual Desktop.
 
 | Champ | Lecture |

@@ -1,6 +1,12 @@
 # Plan d'optimisation VR — REDRIVER2 (OpenXR, Quest 3 + Virtual Desktop, RTX 3060/4080 laptop)
 
-**État (9 novembre 2026, branche `wheel-controller-vr-perf`)** : phase 0 implémentée (mesures `VR: perf`, voir VR_SUPPORT.md), non compilée sous Windows ni mesurée au casque. Les phases 1 à 4 attendent les premières mesures.
+**État (9 novembre 2026, branche `wheel-controller-vr-perf`)** : instrumentation compilée et mesurée. Première passe phase 1 compilée : suppression du rendu plat redondant pendant le suivi, orphelinage du VBO enregistré et budget du pas de jeu dans la boucle casque. Les autres optimisations restent à faire. Gain au casque non encore mesuré.
+
+### Première mesure et correction
+
+Journal utilisateur `data/REDRIVER2.log`, copie locale ignorée `src_rebuild/bin/tests/vr-stutter-before.log` : RTX 3060 Laptop, VirtualDesktopXR, Quest 3, 2496×2688 par œil, **80 Hz / 12,5 ms**. Sur 31 fenêtres avec pas de jeu mesuré : 1 504 périodes manquées au total ; moyenne des moyennes du pas 11,73 ms ; moyenne des moyennes GPU stéréo 2,44 ms (maximum GPU 5,04 ms). Ces moyennes par fenêtre ne sont pas pondérées par leur nombre d'images. Les pointes du jeu atteignent souvent 15–20 ms ; une fenêtre de transition atteint 250,58 ms. La limite mesurée concerne surtout le travail entre soumissions, pas le coût GPU stéréo.
+
+Corrections : `GR_VR_SetSkipFlat` ne supprime que le dessin vers l'écran en suivi de tête, conserve les passes vers VRAM et l'enregistrement, et se désactive dans le hook et à l'arrêt VR. Le miroir OpenXR reste affiché. Le VBO enregistré est orpheliné à chaque nouvel upload. La boucle évalue le temps **après** `xrWaitFrame`/rendu et réserve un pic récent décroissant de coût du jeu (plafond 25 ms, marge 1 ms). La simulation reste à 30 Hz. 575 contrôles et compilation Release Windows réussis ; pas de mesure après correction à ce stade. Refaire une conduite identique et comparer `missed`, `game step`, `eyes GPU` et `frames/step`. À 80 Hz, une alternance 2/3 images par pas est normale ; à 90 Hz, la cible est 3.
 
 ## Contexte
 

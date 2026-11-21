@@ -26,5 +26,8 @@ vrm::Vec3 VR_SeatOffset(); // metres: x right, y up, z forward
 bool VR_HideWheel();       // hide the virtual steering wheel and arms (a real wheel is in your hands)
 bool VR_MapOnDashboard();
 // Minimap screen: rect = window NDC (xmin,ymin,xmax,ymax); centre/halfRight/halfUp in game camera units.
+// Car motion over one simulation step, in the head camera space of the current frame (game axes,
+// game units): lets the headset extrapolate the world between steps. Not called = no motion.
+void VR_SetFrameMotion(const vrm::Mat3& rotation, vrm::Vec3 translation);
 void VR_SetMapScreen(const float rect[4], vrm::Vec3 centre, vrm::Vec3 halfRight, vrm::Vec3 halfUp);
 #endif

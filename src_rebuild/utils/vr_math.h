@@ -5,6 +5,7 @@
 //  * Game camera space (GTE): X right, Y down, Z forward, game units.
 //  * Matrices are column-major float[16] (OpenGL), m[col*4+row].
 #include <cmath>
+#include <algorithm>
 
 namespace vrm {
 
@@ -148,6 +149,12 @@ inline Mat4 projectionFov(float left, float right, float up, float down, float n
 inline Mat4 worldView(const Pose& eye, const Pose& gen, float metresPerPgxpUnit) {
     float s=metresPerPgxpUnit;
     return mul(fromPose(compose(inverse(eye),gen)),scale4(s,-s,-s));
+}
+
+// Return to simulation before spending another headset period. Reserve a recent peak
+// game-step cost; using only the pre-xrWaitFrame timestamp hides its blocking time.
+inline bool yieldToSimulation(double now, double deadline, double period, double gameBudget) {
+    return now + period + std::max(0.0, std::min(.025, gameBudget)) + .001 >= deadline;
 }
 
 // Headset frames shown without a new submission between two of ours: consecutive predicted

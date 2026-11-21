@@ -13,6 +13,8 @@
 #include "overmap.h"
 #include "system.h"
 #include "cockpit.h"
+#include "pause.h"
+#include <cstring>
 #include "../../utils/vr_openxr.h"
 #include "PsyX/PsyX_globals.h"
 
@@ -21,6 +23,11 @@ extern int gLoadedOverlay;
 namespace {
 bool trackedFrame = false;
 int savedScrZ = 256;
+// Previous inside-car frame, to measure the car's motion over one simulation step.
+bool previousValid = false;
+int previousCar = -1;
+vrm::Mat3 previousBase;
+double previousPos[3];
 
 int toFixed(float v) { return int(std::lround(v * 4096.f)); }
 }
@@ -73,6 +80,26 @@ bool VRView_Apply(int view)
 	const float lock = inside ? VR_HorizonLock() : 0.f;
 	if (lock > 0.f)
 		base = vrm::toMat3(vrm::slerp(vrm::fromMat3(w), vrm::fromMat3(vrm::levelWorldToCamera(w)), lock));
+
+	// Car motion since the previous step (inside views only: the chase camera follows the car,
+	// whose own body would then be extrapolated along with the street).
+	const double pos[3] = { double(camera_position.vx), double(camera_position.vy), double(camera_position.vz) };
+	if (inside && previousValid && previousCar == lp.cameraCarId && !pauseflag)
+	{
+		vrm::Mat3 a = vrm::mul(base, vrm::transpose(previousBase));
+		vrm::Vec3 d(float(previousPos[0] - pos[0]), float(previousPos[1] - pos[1]), float(previousPos[2] - pos[2]));
+		vrm::Vec3 b = vrm::mul(base, d);
+		const float angle = 2.f * std::acos(std::min(1.f, std::fabs(vrm::fromMat3(a).w)));
+		if (vrm::length(b) < 600.f && angle < .35f)
+		{
+			const vrm::Mat3 h = vrm::trackingRotationToGame(head.q);
+			VR_SetFrameMotion(vrm::mul(vrm::transpose(h), vrm::mul(a, h)), vrm::mul(vrm::transpose(h), b));
+		}
+	}
+	previousValid = inside;
+	previousCar = lp.cameraCarId;
+	previousBase = base;
+	memcpy(previousPos, pos, sizeof(pos));
 
 	const vrm::Mat3 headed = vrm::headWorldToCamera(base, head.q);
 

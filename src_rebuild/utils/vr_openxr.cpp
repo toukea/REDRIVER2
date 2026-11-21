@@ -265,7 +265,12 @@ float genMetresPerUnit = 1.f / 135;   // game units -> metres, for the frame bei
 bool tracked = false, trackedShown = false, pacedSwap = false;
 double simClock = 0, lastTrackedSwap = -10;
 
-struct Stats { int swaps = 0, trackedSwaps = 0, frames = 0, rendered = 0, eyes = 0, failedLocate = 0; double since = 0; } stats;
+struct Stats { int swaps = 0, trackedSwaps = 0, frames = 0, rendered = 0, eyes = 0, failedLocate = 0; double since = 0, game = 0, hook = 0, hz = 0; } stats;
+double hookLeft = 0;
+
+bool motionValid = false, frameMotionValid = false;
+vrm::Quat motionRotation, frameMotionRotation; vrm::Vec3 motionTranslation, frameMotionTranslation;
+XrTime frameFirstDisplay = 0;
 
 // Timing (perf_log=1), reset with the statistics every 5 s. All durations in milliseconds.
 struct Timing {
@@ -519,6 +524,8 @@ void mirror(const Target& eye) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
 }
 
+XrTime displayNow = 0;
+
 void drawEye(int i, const XrView& view) {
     Target& t = eyes[i];
     GLuint image = acquire(t);
@@ -536,8 +543,16 @@ void drawEye(int i, const XrView& view) {
     vrm::Mat4 proj = vrm::projectionFov(view.fov.angleLeft, view.fov.angleRight, view.fov.angleUp, view.fov.angleDown, cfg.nearPlane, 4000.f);
 
     // PGXP stores camera-space positions in game units / 128.
-    vrm::Mat4 world = vrm::worldView(eye, genHead, genMetresPerUnit * 128.f);
+    vrm::Mat4 attached = vrm::worldView(eye, genHead, genMetresPerUnit * 128.f);
+    vrm::Mat4 world = attached;
+    if (frameMotionValid && displayNow > frameFirstDisplay) {
+        // Between two simulation steps the world keeps flowing past the car at the headset rate.
+        float f = std::min(1.5f, float(double(displayNow - frameFirstDisplay) * 1e-9 * 30.0));
+        vrm::Pose step; step.q = vrm::slerp(vrm::Quat(), frameMotionRotation, f); step.p = frameMotionTranslation * (f / 128.f);
+        world = vrm::mul(attached, vrm::fromPose(step));
+    }
     GR_VR_SetPassUniforms(1, world.m, proj.m);
+    GR_VR_SetViews(world.m, attached.m);
     GR_VR_SetClip(0, nullptr);
     GR_VR_DrawRecorded(1);
 
@@ -560,6 +575,7 @@ void drawEye(int i, const XrView& view) {
     hud = vrm::compose(origin, hud);
     float halfW = cfg.hudWidth * .5f, halfH = halfW * float(g_windowHeight) / float(std::max(1, g_windowWidth));
     vrm::Mat4 hudView = vrm::mul(vrm::fromPose(vrm::compose(vrm::inverse(eye), hud)), vrm::scale4(halfW, halfH, 1));
+    GR_VR_SetViews(nullptr, nullptr);
     GR_VR_SetPassUniforms(2, hudView.m, proj.m);
     GR_VR_SetClip(frameMapValid ? -1 : 0, frameMapRect);
     GR_VR_DrawRecorded(2);
@@ -629,6 +645,8 @@ void renderFrame(bool showTracked, bool firstOfStep, XrTime& displayTime, XrDura
     XrFrameBeginInfo bi = {XR_TYPE_FRAME_BEGIN_INFO};
     if (XR_FAILED(xrBeginFrame_(session, &bi))) return;
     displayTime = fs.predictedDisplayTime; period = fs.predictedDisplayPeriod;
+    displayNow = fs.predictedDisplayTime;
+    if (!frameFirstDisplay) frameFirstDisplay = fs.predictedDisplayTime;
 
     XrSpaceLocation head = {XR_TYPE_SPACE_LOCATION};
     if (XR_SUCCEEDED(xrLocateSpace_(viewSpace, localSpace, fs.predictedDisplayTime, &head)) &&
@@ -788,17 +806,22 @@ void handleKeys() {
 }
 
 void swapHook() {
+    double hookStart = seconds();
+    if (hookLeft > 0) stats.game += hookStart - hookLeft;
     handleKeys();
 #ifdef _WIN32
     pollEvents();
     bool showTracked = tracked;
     tracked = false;
     frameMapValid = mapValid; mapValid = false;
+    frameMotionValid = motionValid && showTracked; motionValid = false;
+    frameMotionRotation = motionRotation; frameMotionTranslation = motionTranslation;
+    frameFirstDisplay = 0;
     if (frameMapValid) { memcpy(frameMapRect, mapRect, sizeof(mapRect)); frameMapCentre = mapCentre; frameMapRight = mapRight; frameMapUp = mapUp; }
     GR_VR_SetSpriteDepth(0);
+    GR_VR_SetSkipFlat(0);
     if (!running) return;
 
-    double hookStart = seconds();
     bool previousTracked = trackedShown;
     if (!showTracked || GR_VR_RecordedVertices(1) == 0) {
         showTracked = false;
@@ -806,7 +829,12 @@ void swapHook() {
     } else lastTrackedSwap = seconds();
     trackedShown = showTracked;
     // Game work since the previous swap: only meaningful between two head-tracked steps.
-    if (cfg.perfLog && showTracked && previousTracked && hookEnd > 0) perf.game.add((hookStart - hookEnd) * 1e3);
+    static double gameBudget = .005;
+    if (showTracked && previousTracked && hookEnd > 0) {
+        double cost = std::max(0.0, hookStart - hookEnd);
+        gameBudget = std::max(std::min(.025, cost), gameBudget * .95);
+        if (cfg.perfLog) perf.game.add(cost * 1e3);
+    } else gameBudget = .005;
 
     // One simulation step lasts 1/30 s: present as many headset frames as fit before the next one.
     double now = seconds();
@@ -817,21 +845,23 @@ void swapHook() {
     int presented = 0;
     for (int frame = 0; frame < 8 && running; ++frame) {
         XrTime displayTime = 0; XrDuration period = 0;
-        double before = seconds();
         renderFrame(showTracked, frame == 0, displayTime, period);
         ++presented;
+        if (period > 0) stats.hz = 1e9 / double(period);
         if (!showTracked) break;
         double p = period > 0 ? double(period) * 1e-9 : 1.0 / 90.0;
-        if (before + p >= simClock) break;
+        if (vrm::yieldToSimulation(seconds(), simClock, p, gameBudget)) break;
         pollEvents();
     }
     if (cfg.perfLog && showTracked) perf.perStep[std::min(presented, 5) - 1]++;
     pacedSwap = showTracked;
     stats.swaps++; if (showTracked) stats.trackedSwaps++;
-    if (seconds() - stats.since > 5) {
-        logInfo("%d swaps (%d head-tracked), %d headset frames, %d rendered, %d stereo, %d locate failures, %d world / %d 2D vertices",
-            stats.swaps, stats.trackedSwaps, stats.frames, stats.rendered, stats.eyes, stats.failedLocate,
-            GR_VR_RecordedVertices(1), GR_VR_RecordedVertices(0));
+    hookLeft = seconds();
+    stats.hook += hookLeft - hookStart;
+    if (hookLeft - stats.since > 5) {
+        logInfo("%d swaps (%d head-tracked), %d headset frames at %.0f Hz, %d rendered, %d stereo, %d locate failures, %d world / %d 2D vertices, game %.1f ms + headset %.1f ms per swap",
+            stats.swaps, stats.trackedSwaps, stats.frames, stats.hz, stats.rendered, stats.eyes, stats.failedLocate,
+            GR_VR_RecordedVertices(1), GR_VR_RecordedVertices(0), stats.game * 1000 / std::max(1, stats.swaps), stats.hook * 1000 / std::max(1, stats.swaps));
         if (cfg.perfLog)
             logInfo("perf %.1f Hz (%.2f ms) | missed %d | game step %.2f avg %.2f max | xrWaitFrame %.2f avg | "
                 "eyes CPU %.2f avg %.2f max (after step %.2f) | eyes GPU %.2f avg %.2f max | frames/step 1:%d 2:%d 3:%d 4:%d 5+:%d",
@@ -964,6 +994,7 @@ bool VR_BeginTrackedFrame(float unitsPerMetre, VRHead* head) {
     genHead = lastHead;
     genMetresPerUnit = 1.f / std::max(1.f, unitsPerMetre);
     tracked = true;
+    GR_VR_SetSkipFlat(1);
     GR_VR_SetSpriteDepth(1);
     vrm::Pose rel = vrm::compose(vrm::inverse(origin), lastHead);
     head->q = rel.q;
@@ -981,4 +1012,10 @@ void VR_SetMapScreen(const float rect[4], vrm::Vec3 centre, vrm::Vec3 halfRight,
     memcpy(mapRect, rect, sizeof(mapRect));
     mapCentre = centre; mapRight = halfRight; mapUp = halfUp;
     mapValid = true;
+}
+
+void VR_SetFrameMotion(const vrm::Mat3& rotation, vrm::Vec3 translation) {
+    motionRotation = vrm::fromMat3(rotation);
+    motionTranslation = translation;
+    motionValid = true;
 }
