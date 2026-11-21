@@ -44,6 +44,8 @@ Utiliser les lanceurs à la racine garantit que les réglages sont lus et enregi
 
 `hardware_rotation` doit correspondre à la plage réellement configurée dans le pilote. `rotation` détermine la plage utilisée en jeu, et `steering_lock` le braquage maximal des roues, en degrés par côté. À plage identique, la relation est linéaire entre les deux butées. Une plage de jeu plus courte ajoute une butée logicielle, dans la limite de l'intensité disponible. L'outil ne modifie pas le pilote du volant.
 
+Chaque clé de `wheel.ini` est précédée d'un commentaire (ligne commençant par `#`) qui donne son rôle, sa plage et le sens d'un réglage. WheelConfig réécrit ces commentaires à chaque sauvegarde, en gardant les valeurs.
+
 Le fichier permet aussi de régler la zone morte (`*_deadzone`), la courbe (`*_gamma`), les minima/centres/maxima, le sens du retour de force (`ffb_invert`), son filtrage, les rapports de boîte et le point de patinage.
 
 Les essais séparés sur le G29 connecté avec Logitech G HUB ont identifié les axes suivants : accélérateur **1**, frein **2**, embrayage **3** (indexation à partir de zéro). Chaque pédale va de `32767` au repos à `-32768` enfoncée ; les trois axes de pédale sont donc inversés lors de la normalisation. Le profil fourni et les valeurs par défaut correspondent à ces mesures. Le volant utilise l'axe **0**. Sur un autre pilote, vérifier ces affectations par des mouvements séparés avant de les modifier.

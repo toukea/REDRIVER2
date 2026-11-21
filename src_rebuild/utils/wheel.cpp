@@ -294,26 +294,173 @@ void Wheel_LoadConfig(const char* path) {
 bool Wheel_SaveConfig(const char* path) {
     std::string temp=std::string(path)+".tmp";
     FILE* f=fopen(temp.c_str(),"wb"); if(!f) return false;
-    fprintf(f,"[wheel]\nenabled=%d\n",g_wheelSettings.enabled);
+    // Every key is written with its explanation, so the file can be edited by
+    // hand without the documentation. ASCII only: MSVC reads this source with
+    // the ANSI code page. The parser skips lines starting with # or ;.
+    auto say=[&](const char* text){ fprintf(f,"%s\n",text); };
+    say("# =====================================================================");
+    say("# REDRIVER2 - configuration du volant (Logitech G29 et compatibles)");
+    say("# Les lignes commencant par # ou ; sont des commentaires.");
+    say("# Le fichier est relu pendant le jeu : une modification est appliquee");
+    say("# en moins d'une seconde. WheelConfig (touche S) le reecrit avec ces");
+    say("# commentaires et garde la version precedente dans wheel.ini.bak.");
+    say("# Les valeurs hors plage sont ramenees dans la plage indiquee.");
+    say("# =====================================================================");
+    say("[wheel]");
+    say("");
+    say("# Support du volant : 1 = actif, 0 = desactive (manette seule).");
+    fprintf(f,"enabled=%d\n",g_wheelSettings.enabled);
+    say("");
+    say("# ---------------------------------------------------------------------");
+    say("# PERIPHERIQUES");
+    say("# Volant, pedalier, shifter et frein a main peuvent etre des appareils");
+    say("# distincts. Le GUID est prioritaire : s'il est renseigne, l'index est");
+    say("# ignore. Index -1 sans GUID : le volant cherche un G29/G920/G923, les");
+    say("# autres groupes reprennent l'appareil du volant.");
+    say("# ---------------------------------------------------------------------");
     const char* names[]={"device","pedals_device","shifter_device","handbrake_device"};
-    for(int i=0;i<4;++i) fprintf(f,"%s=%d\n%s=%s\n",names[i],*deviceSetting(i),guidNames[i],guidSetting(i));
-    for(int i=0;i<5;++i){ const auto& a=g_wheelSettings.axes[i];
-        fprintf(f,"%s_axis=%d\n%s_min=%d\n%s_center=%d\n%s_max=%d\n%s_invert=%d\n%s_deadzone=%.6f\n%s_gamma=%.6f\n",
-            axisNames[i],a.index,axisNames[i],a.minimum,axisNames[i],a.center,axisNames[i],a.maximum,axisNames[i],a.inverted,
-            axisNames[i],a.deadzone,axisNames[i],a.gamma);
+    const char* deviceHelp[]={
+        "# Volant (direction et retour de force) : index SDL de l'appareil.",
+        "# Pedalier : index SDL. Les trois pedales doivent etre sur cet appareil.",
+        "# Shifter (boite en H) : index SDL.",
+        "# Frein a main USB : index SDL."};
+    for(int i=0;i<4;++i){
+        say(deviceHelp[i]);
+        fprintf(f,"%s=%d\n",names[i],*deviceSetting(i));
+        say("# GUID SDL de cet appareil (rempli par WheelConfig ; vide = utiliser l'index).");
+        fprintf(f,"%s=%s\n",guidNames[i],guidSetting(i));
     }
-    for(int i=0;i<6;++i) fprintf(f,"gear%d_button=%d\n",i+1,g_wheelSettings.gearButtons[i]);
-    const auto& ff=g_wheelSettings.force;
-    fprintf(f,"handbrake_button=%d\nrotation=%g\nsteering_lock=%g\nffb_invert=%d\n",
-        g_wheelSettings.handbrakeButton,g_wheelSettings.rotation,g_wheelSettings.steeringLock,g_wheelSettings.forceInvert);
-    fprintf(f,"ffb_gain=%g\nffb_filter=%g\nffb_road=%g\nffb_minimum=%g\nffb_damping=%g\nffb_friction=%g\nffb_caster=%g\nffb_self_center=%g\nffb_load=%g\nffb_knee=%g\nffb_hud=%d\nffb_log=%d\n",
-        ff.gain,ff.filter,ff.road,ff.minimum,ff.damping,ff.friction,ff.caster,ff.selfCenter,ff.load,ff.knee,g_wheelSettings.ffbHud,g_wheelSettings.ffbLog);
+    say("");
+    say("# ---------------------------------------------------------------------");
+    say("# AXES");
+    say("# Valeurs brutes SDL sur 16 bits (-32768 a 32767), mesurees par la");
+    say("# calibration de WheelConfig (touche C). Mesures G29/G HUB : volant 0,");
+    say("# accelerateur 1, frein 2, embrayage 3.");
+    say("# ---------------------------------------------------------------------");
+    const char* axisHelp[]={
+        "# --- Direction (volant) ---",
+        "# --- Accelerateur ---",
+        "# --- Frein (une pression a fond peut bloquer les roues : pas d'ABS) ---",
+        "# --- Embrayage : 0 = relache, 1 = enfonce (transmission coupee) ---",
+        "# --- Frein a main analogique (optionnel, en plus de handbrake_button) ---"};
+    for(int i=0;i<5;++i){ const auto& a=g_wheelSettings.axes[i]; const char* n=axisNames[i];
+        if(i) say("");
+        say(axisHelp[i]);
+        say("# Numero d'axe SDL, a partir de 0 (-1 = non affecte).");
+        fprintf(f,"%s_axis=%d\n",n,a.index);
+        say("# Valeur brute a une butee (pedale : repos ou enfoncee selon l'appareil).");
+        fprintf(f,"%s_min=%d\n",n,a.minimum);
+        say(i?"# Valeur brute au centre : ignoree pour une pedale.":"# Valeur brute volant droit.");
+        fprintf(f,"%s_center=%d\n",n,a.center);
+        say("# Valeur brute a l'autre butee.");
+        fprintf(f,"%s_max=%d\n",n,a.maximum);
+        say(i?"# 1 = inverser le sens (pedales G29 : 1, elles valent 32767 au repos).":"# 1 = inverser le sens de la direction.");
+        fprintf(f,"%s_invert=%d\n",n,a.inverted);
+        say("# Zone morte : part de la course ignoree (0 a 0.4).");
+        fprintf(f,"%s_deadzone=%.6f\n",n,a.deadzone);
+        say("# Courbe de reponse : 1 = lineaire, >1 = plus doux au debut, <1 = plus vif (0.2 a 5).");
+        fprintf(f,"%s_gamma=%.6f\n",n,a.gamma);
+    }
+    say("");
+    say("# ---------------------------------------------------------------------");
+    say("# BOUTONS");
+    say("# Numeros de bouton SDL a partir de 0 ; -1 = non affecte.");
+    say("# ---------------------------------------------------------------------");
+    for(int i=0;i<6;++i){
+        if(i<5) fprintf(f,"# Shifter, position %d : rapport %d.\n",i+1,i+1);
+        else say("# Shifter, position 6 : marche arriere (la marche arriere physique n'est pas utilisee).");
+        fprintf(f,"gear%d_button=%d\n",i+1,g_wheelSettings.gearButtons[i]);
+    }
+    say("# Bouton du frein a main, lu sur l'appareil handbrake_device.");
+    fprintf(f,"handbrake_button=%d\n",g_wheelSettings.handbrakeButton);
+    say("");
+    say("# ---------------------------------------------------------------------");
+    say("# DIRECTION");
+    say("# ---------------------------------------------------------------------");
+    say("# Plage reglee dans le pilote du volant (G HUB), en degres de butee a butee.");
     fprintf(f,"hardware_rotation=%g\n",g_wheelSettings.hardwareRotation);
-    fprintf(f,"handbrake_on=%g\nhandbrake_off=%g\n",g_wheelSettings.handbrakeOn,g_wheelSettings.handbrakeOff);
+    say("# Plage utilisee en jeu (180 a 2520). Plus courte que hardware_rotation :");
+    say("# une butee logicielle est ajoutee par le retour de force.");
+    fprintf(f,"rotation=%g\n",g_wheelSettings.rotation);
+    say("# Braquage maximal des roues avant, en degres par cote (10 a 45).");
+    fprintf(f,"steering_lock=%g\n",g_wheelSettings.steeringLock);
+    say("");
+    say("# ---------------------------------------------------------------------");
+    say("# RETOUR DE FORCE");
+    say("# ---------------------------------------------------------------------");
+    const auto& ff=g_wheelSettings.force;
+    say("# 1 = inverser le sens du retour de force (le volant pousse du mauvais cote).");
+    fprintf(f,"ffb_invert=%d\n",g_wheelSettings.forceInvert);
+    say("# Force globale (0 a 1.5, compression douce au-dessus de 1). Trop mou : augmenter.");
+    fprintf(f,"ffb_gain=%g\n",ff.gain);
+    say("# Lissage du couple, 1 = aucun (0.05 a 1). A-coups : diminuer ; retard : augmenter.");
+    fprintf(f,"ffb_filter=%g\n",ff.filter);
+    say("# Bosses, compression des suspensions, herbe et sable (0 a 1).");
+    fprintf(f,"ffb_road=%g\n",ff.road);
+    say("# Compensation de la zone morte du moteur (0 a 0.25). Centre mort : 0.10 a 0.12.");
+    fprintf(f,"ffb_minimum=%g\n",ff.minimum);
+    say("# Amortisseur (0 a 1). Oscillations en lachant le volant : augmenter.");
+    fprintf(f,"ffb_damping=%g\n",ff.damping);
+    say("# Frottement des pneus a l'arret, s'efface vers 30 km/h (0 a 1).");
+    fprintf(f,"ffb_friction=%g\n",ff.friction);
+    say("# Poids conserve a la limite d'adherence (0 a 2). Allegement trop brutal : 0.4 a 0.6.");
+    fprintf(f,"ffb_caster=%g\n",ff.caster);
+    say("# Rappel vers le centre independant de la vitesse (0 a 1).");
+    fprintf(f,"ffb_self_center=%g\n",ff.selfCenter);
+    say("# Transfert de charge : direction plus lourde au freinage (0 a 1, 0 = desactive).");
+    fprintf(f,"ffb_load=%g\n",ff.load);
+    say("# Debut de la compression douce (0.3 a 1). CLIP frequent : baisser d'abord ffb_gain.");
+    fprintf(f,"ffb_knee=%g\n",ff.knee);
+    say("# 1 = afficher FFB (niveau), GRIP (glissement avant, 100 = limite) et CLIP a l'ecran.");
+    fprintf(f,"ffb_hud=%d\n",g_wheelSettings.ffbHud);
+    say("# 1 = ecrire ffb_telemetry.csv dans le dossier du jeu (20 minutes au plus).");
+    fprintf(f,"ffb_log=%d\n",g_wheelSettings.ffbLog);
+    say("");
+    say("# ---------------------------------------------------------------------");
+    say("# FREIN A MAIN (axe analogique)");
+    say("# ---------------------------------------------------------------------");
+    say("# Course a partir de laquelle le frein a main serre (effet Triangle), 0.05 a 1.");
+    fprintf(f,"handbrake_on=%g\n",g_wheelSettings.handbrakeOn);
+    say("# Course sous laquelle il se relache ; inferieure a handbrake_on (hysteresis).");
+    fprintf(f,"handbrake_off=%g\n",g_wheelSettings.handbrakeOff);
+    say("");
+    say("# ---------------------------------------------------------------------");
+    say("# EMBRAYAGE ET BOITE DE VITESSES");
+    say("# ---------------------------------------------------------------------");
     const auto& t=g_wheelSettings.transmission;
-    fprintf(f,"assisted_clutch=%d\ndriver_burnout=%d\nclutch_bite=%g\nfinal_drive=%g\ntyre_radius=%g\nidle_rpm=%g\nredline_rpm=%g\n",t.assisted,t.burnout,t.bite,t.finalDrive,t.tyreRadius,t.idle,t.redline);
-    for(int i=0;i<6;++i) fprintf(f,"ratio%d=%g\n",i,t.ratios[i]);
-    fprintf(f,"auto_gearing=%d\ngear_torque=%g\nclutch_window=%g\nshift_window=%g\n",t.autoGearing,t.gearTorque,t.clutchWindow,t.shiftWindow);
+    say("# 1 = embrayage assiste (la pedale reste prioritaire), 0 = manuel.");
+    fprintf(f,"assisted_clutch=%d\n",t.assisted);
+    say("# 1 = burnout Driver (Circle) en premiere, au-dela de 97 % d'accelerateur.");
+    fprintf(f,"driver_burnout=%d\n",t.burnout);
+    say("# Course d'embrayage ou la transmission est coupee et le passage autorise (0.1 a 0.95).");
+    fprintf(f,"clutch_bite=%g\n",t.bite);
+    say("# Zone de patinage sous clutch_bite (0.05 a 0.6). En dessous de");
+    say("# clutch_bite - clutch_window, l'embrayage transmet tout.");
+    fprintf(f,"clutch_window=%g\n",t.clutchWindow);
+    say("# Delai en secondes pendant lequel un rapport est encore accepte apres");
+    say("# avoir debraye (0 a 1). Passages rapides refuses (CLUTCH!) : augmenter.");
+    fprintf(f,"shift_window=%g\n",t.shiftWindow);
+    say("# 1 = etagement calcule pour chaque voiture : la 5e atteint sa vitesse de");
+    say("# pointe d'origine sous le limiteur. 0 = utiliser final_drive et tyre_radius.");
+    fprintf(f,"auto_gearing=%d\n",t.autoGearing);
+    say("# Part de la demultiplication transmise aux roues (0 a 1). 0 = poussee");
+    say("# constante d'origine dans tous les rapports ; 0.7 = reprises plus franches.");
+    fprintf(f,"gear_torque=%g\n",t.gearTorque);
+    say("# Rapport de pont, utilise seulement avec auto_gearing=0 (1 a 8).");
+    fprintf(f,"final_drive=%g\n",t.finalDrive);
+    say("# Rayon de roue en metres, utilise seulement avec auto_gearing=0 (0.2 a 0.6).");
+    fprintf(f,"tyre_radius=%g\n",t.tyreRadius);
+    say("# Regime de ralenti en tr/min (600 a 1500).");
+    fprintf(f,"idle_rpm=%g\n",t.idle);
+    say("# Regime maxi en tr/min, debut du limiteur (3000 a 10000).");
+    fprintf(f,"redline_rpm=%g\n",t.redline);
+    say("# Rapports de boite (0.3 a 6). Avec auto_gearing=1, seuls les ecarts entre");
+    say("# eux comptent : la 5e est toujours calee sur la vitesse de pointe.");
+    for(int i=0;i<6;++i){
+        if(i) fprintf(f,"# Rapport de la %d%s.\n",i,i==1?"re":"e");
+        else say("# Marche arriere.");
+        fprintf(f,"ratio%d=%g\n",i,t.ratios[i]);
+    }
     bool ok=!ferror(f); if(fclose(f)) ok=false;
     if(!ok) return false;
     // SDL's portable file API has no atomic replacement; retain a recoverable backup.
